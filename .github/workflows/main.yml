@@ -17,31 +17,50 @@ jobs:
 
       - name: 安装 repo
         run: |
-          curl https://storage.googleapis.com/git-repo-downloads/repo > /usr/local/bin/repo
-          chmod a+x /usr/local/bin/repo
+          sudo curl https://storage.googleapis.com/git-repo-downloads/repo > /usr/local/bin/repo
+          sudo chmod a+x /usr/local/bin/repo
 
       - name: 拉取 Android14-6.1 内核
         if: steps.cache-kernel.outputs.cache-hit != 'true'
         run: |
           mkdir -p android-kernel && cd android-kernel
           repo init -u https://android.googlesource.com/kernel/manifest -b common-android14-6.1 --no-repo-verify --depth=1
-          repo sync --force-sync --no-clone-bundle --no-tags -j32
+          repo sync --force-sync --no-clone-bundle --no-tags -j$(nproc)
 
-      # 👇👇👇 这里是修复重点！直接复制你的驱动文件
+      # 修复重点：除了拷贝，还必须生成 Bazel 识别的 BUILD 文件
       - name: 放入驱动
         run: |
           cd android-kernel
           mkdir -p common/drivers/hello
           cp ../hello.c ../Makefile common/drivers/hello/
-          echo "obj-y += hello/" >> common/drivers/Makefile
+          
+          # 创建 Kbuild 文件（Kleaf 依赖它）
+          echo "obj-m += hello.o" > common/drivers/hello/Kbuild
+
+          # 创建 BUILD 文件，这是 Bazel 编译的核心
+          cat <<EOF > common/drivers/hello/BUILD
+load("//build/kernel/kleaf:kernel.bzl", "kernel_module")
+
+kernel_module(
+    name = "hello",
+    srcs = glob(["**"]),
+    outs = ["hello.ko"],
+    kernel_build = "//common:kernel_aarch64",
+    visibility = ["//visibility:public"],
+)
+EOF
+          # 将模块注册到全局编译树中
+          echo "kernel_module(name = \"hello\", kernel_build = \"//common:kernel_aarch64\")" >> common/drivers/BUILD
 
       - name: 编译 ko
         run: |
           cd android-kernel
-          tools/bazel run //common:kernel_aarch64_dist -- --destdir=out/dist
+          # 依然执行你要求的完整分发编译，它会包含我们新加的模块
+          tools/bazel run --config=fast //common:kernel_aarch64_dist -- --destdir=out/dist
 
       - name: 上传 ko
         uses: actions/upload-artifact@v4
         with:
           name: hello-ko
-          path: android-kernel/out/android14-6.1/common/drivers/hello/*.ko
+          # kernel_aarch64_dist 会把编译好的 ko 放在 --destdir 指定的目录下
+          path: android-kernel/out/dist/hello.ko
