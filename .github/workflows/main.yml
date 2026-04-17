@@ -1,4 +1,4 @@
-name: 极速编译 hello.ko (Android14-6.1)
+name: Android14-6.1-KO
 on:
   workflow_dispatch:
 
@@ -6,30 +6,47 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 拉取你的驱动代码
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: 安装编译环境
+      - name: 缓存内核源码
+        id: cache-kernel
+        uses: actions/cache@v4
+        with:
+          path: android-kernel
+          key: kernel-android14-6.1
+
+      - name: 安装 repo
         run: |
-          sudo apt update
-          sudo apt install -y bc bison flex libssl-dev make gcc-aarch64-linux-gnu
+          curl https://storage.googleapis.com/git-repo-downloads/repo > /usr/local/bin/repo
+          chmod a+x /usr/local/bin/repo
 
-      - name: 下载官方 GKI 内核编译组件
+      - name: 拉取 Android14-6.1 内核
+        if: steps.cache-kernel.outputs.cache-hit != 'true'
         run: |
-          wget -O kernel.tar.gz https://github.com/topjohnwu/android-kernel-prebuilt/releases/download/android14-6.1/kernel.tar.gz
-          tar -zxf kernel.tar.gz
-          mv usr/src/kernel-6.1 kernel
+          mkdir -p android-kernel && cd android-kernel
+          repo init -u https://android.googlesource.com/kernel/manifest -b common-android14-6.1 --no-repo-verify --depth=1
+          repo sync --force-sync --no-clone-bundle --no-tags -j32
 
-      - name: 仅编译 ko 模块（超快）
+      - name: 放入驱动
         run: |
-          make -C kernel \
-            ARCH=arm64 \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            M=$PWD \
-            modules
+          cd android-kernel
+          mkdir -p common/drivers/hello
+          cp ../hello.c ../Makefile common/drivers/hello/
+          echo "obj-y += hello/" >> common/drivers/Makefile
 
-      - name: 上传编译好的 hello.ko
+      # 👇👇👇 重点在这里！只编译 ko 模块！超快！
+      - name: 只编译 hello.ko 模块
+        run: |
+          cd android-kernel
+          tools/bazel build //common/drivers/hello:hello_modules
+
+      # 👇👇👇 自动复制出 ko 文件
+      - name: 复制 ko 到根目录
+        run: |
+          cp android-kernel/out/android14-6.1/common/drivers/hello/*.ko .
+
+      - name: 上传 ko
         uses: actions/upload-artifact@v4
         with:
-          name: hello_ko
+          name: hello-ko
           path: ./*.ko
