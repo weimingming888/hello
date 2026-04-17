@@ -2,7 +2,7 @@ name: Android14-6.1-KO
 on:
   workflow_dispatch:
 
-jobs:
+jobs: 
   build:
     runs-on: ubuntu-latest
     steps:
