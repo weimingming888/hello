@@ -17,36 +17,53 @@ jobs:
 
       - name: Install repo
         run: |
-          curl https://storage.googleapis.com/git-repo-downloads/repo > /usr/local/bin/repo
-          chmod a+x /usr/local/bin/repo
+          sudo curl https://googleapis.com > /usr/local/bin/repo
+          sudo chmod a+x /usr/local/bin/repo
 
       - name: Repo init kernel
         if: steps.cache-kernel.outputs.cache-hit != 'true'
         run: |
           mkdir -p android-kernel
           cd android-kernel
-          repo init -u https://android.googlesource.com/kernel/manifest -b common-android14-6.1 --depth=1
-          repo sync -j32 --no-clone-bundle --no-tags
+          repo init -u https://googlesource.com -b common-android14-6.1 --depth=1
+          repo sync -j$(nproc) --no-clone-bundle --no-tags
 
-      # 把驱动放进内核目录
-      - name: Add driver
+      # 关键修复：创建 Bazel 要求的 BUILD 文件和 Kbuild 文件
+      - name: Add driver and create Bazel config
         run: |
           cd android-kernel
           mkdir -p common/drivers/hello
-          cp ../hello.c ../Makefile common/drivers/hello/
-          echo "obj-m += hello/" >> common/drivers/Makefile
+          
+          # 拷贝源代码
+          cp ../hello.c common/drivers/hello/
+          
+          # 创建 Kbuild 文件 (内核编译规范)
+          echo "obj-m += hello.o" > common/drivers/hello/Kbuild
+          
+          # 创建 BUILD 文件 (Kleaf/Bazel 规范)
+          cat <<EOF > common/drivers/hello/BUILD
+load("//build/kernel/kleaf:kernel.bzl", "kernel_module")
 
-      # ==========================================
-      # 👇 👇 👇 真正只编译 ko，不编译内核！
-      # ==========================================
+kernel_module(
+    name = "hello_module",
+    srcs = glob(["**"]),
+    outs = ["hello.ko"],
+    kernel_build = "//common:kernel_aarch64",
+    visibility = ["//visibility:public"],
+)
+EOF
+
+      # 编译目标改为我们在 BUILD 中定义的 //common/drivers/hello:hello_module
       - name: 只编译 hello.ko 模块
         run: |
           cd android-kernel
-          tools/bazel build --config=fast //common/drivers/hello:modules
+          # --config=fast 可以跳过一些冗余检查提高速度
+          tools/bazel build --config=fast //common/drivers/hello:hello_module
 
-      # 自动找到 ko 并上传
+      # 自动找到编译产物并上传
       - name: Upload ko
         uses: actions/upload-artifact@v4
         with:
           name: hello-ko
-          path: android-kernel/out/android14-6.1/common/drivers/hello/*.ko
+          # Kleaf 编译后的产物固定在 bazel-bin 下的对应目录中
+          path: android-kernel/bazel-bin/common/drivers/hello/hello.ko
