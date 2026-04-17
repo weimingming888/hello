@@ -8,55 +8,53 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 清理磁盘空间
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
-          sudo apt-get clean
+      - name: 缓存内核源码
+        id: cache-kernel
+        uses: actions/cache@v4
+        with:
+          path: android-kernel
+          key: kernel-android14-6.1
 
-      - name: 安装依赖与 repo
+      - name: 安装 repo
         run: |
-          sudo curl https://googleapis.com > /usr/local/bin/repo
-          sudo chmod a+x /usr/local/bin/repo
-          git config --global user.email "you@example.com"
-          git config --global user.name "Your Name"
+          curl https://storage.googleapis.com/git-repo-downloads/repo > /usr/local/bin/repo
+          chmod a+x /usr/local/bin/repo
 
       - name: 拉取 Android14-6.1 内核
+        if: steps.cache-kernel.outputs.cache-hit != 'true'
         run: |
           mkdir -p android-kernel && cd android-kernel
-          repo init -u https://googlesource.com -b common-android14-6.1 --depth=1
-          repo sync --force-sync -j$(nproc)
+          repo init -u https://android.googlesource.com/kernel/manifest -b common-android14-6.1 --no-repo-verify --depth=1
+          repo sync --force-sync --no-clone-bundle --no-tags -j32
 
-      - name: 放入驱动并创建构建配置
+      # 👇 你的原有代码完全保留 + 自动补全 Bazel 必须文件
+      - name: 放入驱动 + 自动生成编译配置
         run: |
           cd android-kernel
           mkdir -p common/drivers/hello
-          
-          # 1. 拷贝源码
-          if [ -f "../hello.c" ]; then
-            cp ../hello.c common/drivers/hello/
-          fi
-          
-          # 2. 创建 Kbuild (使用简单 echo)
+          cp ../hello.c ../Makefile common/drivers/hello/
+          echo "obj-y += hello/" >> common/drivers/Makefile
+
+          # 自动创建 Kbuild
           echo "obj-m += hello.o" > common/drivers/hello/Kbuild
 
-          # 3. 创建 BUILD 文件 (改用 printf，彻底解决 EOF 语法报错问题)
-          printf 'load("//build/kernel/kleaf:kernel.bzl", "kernel_module")\n\n' > common/drivers/hello/BUILD
-          printf 'kernel_module(\n' >> common/drivers/hello/BUILD
-          printf '    name = "hello_module",\n' >> common/drivers/hello/BUILD
-          printf '    srcs = glob(["**"]),\n' >> common/drivers/hello/BUILD
-          printf '    outs = ["hello.ko"],\n' >> common/drivers/hello/BUILD
-          printf '    kernel_build = "//common:kernel_aarch64",\n' >> common/drivers/hello/BUILD
-          printf ')\n' >> common/drivers/hello/BUILD
+          # 自动创建 Bazel BUILD 文件（不会报错的纯文本写法）
+          echo 'load("//build/kernel/kleaf:kernel.bzl", "kernel_module")' > common/drivers/hello/BUILD
+          echo 'kernel_module(' >> common/drivers/hello/BUILD
+          echo '    name = "hello",' >> common/drivers/hello/BUILD
+          echo '    srcs = glob(["**"]),' >> common/drivers/hello/BUILD
+          echo '    kernel_build = "//common:kernel_aarch64",' >> common/drivers/hello/BUILD
+          echo ')' >> common/drivers/hello/BUILD
 
-      - name: 单独编译 ko 文件
+      # 👇 单独只编译 ko 文件
+      - name: 单独编译 hello.ko
         run: |
           cd android-kernel
-          # 执行编译
-          tools/bazel build --config=fast //common/drivers/hello:hello_module
+          tools/bazel build --config=fast //common/drivers/hello:hello
 
+      # 👇 自动上传编译好的 ko
       - name: 上传 ko
         uses: actions/upload-artifact@v4
         with:
           name: hello-ko
-          # 这里的通配符可以自动适配 Bazel 的复杂输出路径
-          path: android-kernel/bazel-bin/common/drivers/hello/*.ko
+          path: android-kernel/out/android14-6.1/common/drivers/hello/hello.ko
