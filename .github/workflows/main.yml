@@ -15,28 +15,28 @@ jobs:
 
       - name: 获取安卓官方 Clang 工具链
         run: |
-          # 使用更稳定的 Android 官方存储库链接
+          # 必须指向完整的工具链路径
           mkdir -p $GITHUB_WORKSPACE/clang-tools
           git clone https://googlesource.com $GITHUB_WORKSPACE/clang-tools --depth=1
 
       - name: 获取内核源码 (GKI 6.1)
         run: |
-          # 拉取 Android 15 - 6.1 分支
+          # 指向完整的内核通用源码路径
           git clone https://googlesource.com $GITHUB_WORKSPACE/common --depth=1 -b android15-6.1
 
       - name: 编译模块
         run: |
-          # 动态寻找 Clang 目录，防止版本号写死导致报错
-          CLANG_DIR=$(ls -d $GITHUB_WORKSPACE/clang-tools/clang-r*)
-          export PATH=$CLANG_DIR/bin:$PATH
+          # 自动定位 Clang 目录并加入环境变量
+          CLANG_BIN=$(find $GITHUB_WORKSPACE/clang-tools -name "clang" | head -n 1 | xargs dirname)
+          export PATH=$CLANG_BIN:$PATH
           KDIR=$GITHUB_WORKSPACE/common
           
-          # 1. 配置内核环境
+          # 1. 预配置内核
           cd $KDIR
           make ARCH=arm64 LLVM=1 gki_defconfig
           make ARCH=arm64 LLVM=1 prepare modules_prepare
 
-          # 2. 编译你的模块
+          # 2. 编译模块
           cd $GITHUB_WORKSPACE
           make ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-linux-gnu- KDIR=$KDIR
           
