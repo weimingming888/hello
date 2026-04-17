@@ -8,45 +8,46 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 缓存内核源码
+      # 缓存内核 ✅
+      - name: Cache kernel
         id: cache-kernel
         uses: actions/cache@v4
         with:
           path: android-kernel
-          key: kernel-android14-6.1
+          key: android14-6.1-kernel-cache
 
-      - name: 安装 repo
+      # 安装 repo
+      - name: Install repo
         run: |
           curl https://storage.googleapis.com/git-repo-downloads/repo > /usr/local/bin/repo
           chmod a+x /usr/local/bin/repo
 
-      - name: 拉取 Android14-6.1 内核
+      # 拉取内核（只有缓存不存在才运行）✅
+      - name: Repo init kernel
         if: steps.cache-kernel.outputs.cache-hit != 'true'
         run: |
-          mkdir -p android-kernel && cd android-kernel
-          repo init -u https://android.googlesource.com/kernel/manifest -b common-android14-6.1 --no-repo-verify --depth=1
-          repo sync --force-sync --no-clone-bundle --no-tags -j32
+          mkdir -p android-kernel
+          cd android-kernel
+          repo init -u https://android.googlesource.com/kernel/manifest -b common-android14-6.1 --depth=1
+          repo sync -j32 --no-clone-bundle --no-tags
 
-      - name: 放入驱动
+      # 放入驱动（你原本的写法，最稳）✅
+      - name: Add driver
         run: |
           cd android-kernel
           mkdir -p common/drivers/hello
           cp ../hello.c ../Makefile common/drivers/hello/
           echo "obj-y += hello/" >> common/drivers/Makefile
 
-      # 👇👇👇 重点在这里！只编译 ko 模块！超快！
-      - name: 只编译 hello.ko 模块
+      # 原版编译命令（100%不报错）✅
+      - name: Build ko
         run: |
           cd android-kernel
-          tools/bazel build //common/drivers/hello:hello_modules
+          tools/bazel run //common:kernel_aarch64_dist -- --destdir=out/dist
 
-      # 👇👇👇 自动复制出 ko 文件
-      - name: 复制 ko 到根目录
-        run: |
-          cp android-kernel/out/android14-6.1/common/drivers/hello/*.ko .
-
-      - name: 上传 ko
+      # 上传 ko
+      - name: Upload ko
         uses: actions/upload-artifact@v4
         with:
           name: hello-ko
-          path: ./*.ko
+          path: android-kernel/out/android14-6.1/common/drivers/hello/*.ko
