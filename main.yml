@@ -1,0 +1,45 @@
+name: Build Android 15 GKI Module
+on: [push, workflow_dispatch]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出你的代码
+        uses: actions/checkout@v4
+
+      - name: 安装基础依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison build-essential flex git libelf-dev libssl-dev
+
+      - name: 获取安卓官方 Clang 工具链
+        run: |
+          # 下载 Android 15 对应的 Clang 版本 (r522859)
+          git clone https://googlesource.com --depth=1 -b main $GITHUB_WORKSPACE/clang-tools
+
+      - name: 获取内核源码 (仅头文件和构建脚本)
+        run: |
+          # 针对 Android 15 - 6.1 GKI 
+          git clone https://googlesource.com --depth=1 -b android15-6.1 $GITHUB_WORKSPACE/common
+
+      - name: 编译模块
+        run: |
+          # 设置工具链路径
+          export PATH=$GITHUB_WORKSPACE/clang-tools/clang-r522859/bin:$PATH
+          KDIR=$GITHUB_WORKSPACE/common
+          
+          # 1. 配置内核环境
+          cd $KDIR
+          make ARCH=arm64 LLVM=1 LLVM_IAS=1 gki_defconfig
+          make ARCH=arm64 LLVM=1 LLVM_IAS=1 prepare modules_prepare
+
+          # 2. 编译你的模块
+          cd $GITHUB_WORKSPACE
+          make ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE=aarch64-linux-gnu- KDIR=$KDIR
+          
+      - name: 上传编译好的 KO 文件
+        uses: actions/upload-artifact@v4
+        with:
+          name: hello-module
+          path: ./*.ko
