@@ -1,6 +1,6 @@
 name: Android14-6.1-KO
 on:
-  workflow_dispatch:
+  workflow_dispatch: # 这个一定要在第 3 行，且顶格写
 
 jobs:
   build:
@@ -8,54 +8,58 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 缓存内核源码
-        id: cache-kernel
-        uses: actions/cache@v4
-        with:
-          path: android-kernel
-          key: kernel-android14-6.1
-
-      - name: 安装 repo
+      - name: Free Disk Space
         run: |
-          sudo curl -s -L https://storage.googleapis.com/git-repo-downloads/repo > /usr/local/bin/repo
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+
+      - name: Install repo
+        run: |
+          sudo curl https://googleapis.com > /usr/local/bin/repo
           sudo chmod a+x /usr/local/bin/repo
+          git config --global user.email "you@example.com"
+          git config --global user.name "Your Name"
 
-      - name: 拉取 Android14-6.1 内核
-        if: steps.cache-kernel.outputs.cache-hit != 'true'
+      - name: Repo init kernel
         run: |
-          mkdir -p android-kernel
-          cd android-kernel
-          repo init -u https://android.googlesource.com/kernel/manifest -b common-android14-6.1 --no-repo-verify --depth=1
-          repo sync --force-sync --no-clone-bundle --no-tags -j$(nproc)
+          mkdir -p android-kernel && cd android-kernel
+          repo init -u https://googlesource.com -b common-android14-6.1 --depth=1
+          repo sync -j$(nproc) --no-clone-bundle --no-tags
 
-      - name: 放入驱动并创建 Bazel 配置
+      - name: Add driver and create BUILD file
         run: |
           cd android-kernel
           mkdir -p common/drivers/hello
-          cp ../hello.c ../Makefile common/drivers/hello/
           
-          # 创建 Kbuild
+          # 如果你仓库根目录有 hello.c 就拷贝，没有就生成个简单的测试
+          if [ -f "../hello.c" ]; then
+            cp ../hello.c common/drivers/hello/
+          else
+            echo '#include <linux/module.h>\n#include <linux/kernel.h>\nMODULE_LICENSE("GPL");\nint init_module(void){printk("hello\\n");return 0;}\nvoid cleanup_module(void){}' > common/drivers/hello/hello.c
+          fi
+
           echo "obj-m += hello.o" > common/drivers/hello/Kbuild
 
-          # 创建 Bazel 需要的 BUILD 文件（修复语法）
-          cat <<'EOF' > common/drivers/hello/BUILD
+          # 必须创建这个 BUILD 文件，否则 bazel 报错
+          cat <<EOF > common/drivers/hello/BUILD
 load("//build/kernel/kleaf:kernel.bzl", "kernel_module")
-
 kernel_module(
-    name = "hello",
+    name = "hello_module",
     srcs = glob(["**"]),
+    outs = ["hello.ko"],
     kernel_build = "//common:kernel_aarch64",
-    visibility = ["//visibility:public"],
 )
 EOF
 
-      - name: 只编译 hello.ko 模块
+      - name: Build only KO
         run: |
           cd android-kernel
-          tools/bazel build --config=fast //common/drivers/hello:hello
+          # 只编译这个模块，不编译整个内核，防止超时和磁盘满
+          tools/bazel build --config=fast //common/drivers/hello:hello_module
 
-      - name: 上传 ko
+      - name: Upload ko
         uses: actions/upload-artifact@v4
         with:
           name: hello-ko
-          path: android-kernel/out/android14-6.1/common/drivers/hello/hello.ko
+          path: android-kernel/bazel-bin/common/drivers/hello/hello.ko
