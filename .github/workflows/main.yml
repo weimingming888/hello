@@ -1,47 +1,40 @@
-name: Build Android 15 GKI Module
-on: [push, workflow_dispatch]
+name: Android14-6.1-KO
+
+on:
+  workflow_dispatch: # 手动触发
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 检出你的代码
+      - name: Checkout 驱动代码
         uses: actions/checkout@v4
 
-      - name: 安装基础依赖
+      - name: 安装 repo
         run: |
-          sudo apt-get update
-          sudo apt-get install -y bc bison build-essential flex git libelf-dev libssl-dev
+          curl https://storage.googleapis.com/git-repo-downloads/repo > /usr/local/bin/repo
+          chmod a+x /usr/local/bin/repo
 
-      - name: 获取安卓官方 Clang 工具链
+      - name: 拉取 Android14-6.1 内核源码
         run: |
-          # 必须指向完整的工具链路径
-          mkdir -p $GITHUB_WORKSPACE/clang-tools
-          git clone https://googlesource.com $GITHUB_WORKSPACE/clang-tools --depth=1
+          mkdir -p android-kernel && cd android-kernel
+          repo init -u https://android.googlesource.com/kernel/manifest -b common-android14-6.1 --no-repo-verify --depth=1
+          repo sync --force-sync --no-clone-bundle --no-tags -j32
 
-      - name: 获取内核源码 (GKI 6.1)
+      - name: 放入驱动并配置编译
         run: |
-          # 指向完整的内核通用源码路径
-          git clone https://googlesource.com $GITHUB_WORKSPACE/common --depth=1 -b android15-6.1
+          cd android-kernel
+          mkdir -p common/drivers
+          cp -r ../kerneldriver common/drivers/
+          echo "obj-y += kerneldriver/" >> common/drivers/Makefile
 
-      - name: 编译模块
+      - name: Bazel 编译内核与模块
         run: |
-          # 自动定位 Clang 目录并加入环境变量
-          CLANG_BIN=$(find $GITHUB_WORKSPACE/clang-tools -name "clang" | head -n 1 | xargs dirname)
-          export PATH=$CLANG_BIN:$PATH
-          KDIR=$GITHUB_WORKSPACE/common
-          
-          # 1. 预配置内核
-          cd $KDIR
-          make ARCH=arm64 LLVM=1 gki_defconfig
-          make ARCH=arm64 LLVM=1 prepare modules_prepare
+          cd android-kernel
+          tools/bazel run //common:kernel_aarch64_dist -- --destdir=out/dist
 
-          # 2. 编译模块
-          cd $GITHUB_WORKSPACE
-          make ARCH=arm64 LLVM=1 CROSS_COMPILE=aarch64-linux-gnu- KDIR=$KDIR
-          
-      - name: 上传编译好的 KO 文件
+      - name: 上传 ko 驱动
         uses: actions/upload-artifact@v4
         with:
-          name: hello-module
-          path: ./*.ko
+          name: mydriver-ko
+          path: android-kernel/out/android14-6.1/common/drivers/kerneldriver/*.ko
