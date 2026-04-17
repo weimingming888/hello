@@ -27,21 +27,42 @@ jobs:
           repo init -u https://android.googlesource.com/kernel/manifest -b common-android14-6.1 --no-repo-verify --depth=1
           repo sync --force-sync --no-clone-bundle --no-tags -j32
 
-      # 👇👇👇 这里是修复重点！直接复制你的驱动文件
-      - name: 放入驱动
+      # ==============================
+      # 自动补全 Bazel 需要的所有文件
+      # ==============================
+      - name: 放入驱动 + 自动创建编译配置
         run: |
           cd android-kernel
           mkdir -p common/drivers/hello
           cp ../hello.c ../Makefile common/drivers/hello/
-          echo "obj-y += hello/" >> common/drivers/Makefile
 
-      - name: 编译 ko
+          # 创建 Kbuild (必须)
+          echo "obj-m += hello.o" > common/drivers/hello/Kbuild
+
+          # 创建 BUILD.bazel (必须，解决你报错的核心)
+          cat <<'EOF' > common/drivers/hello/BUILD.bazel
+load("//build/kernel/kleaf:kernel.bzl", "kernel_module")
+
+kernel_module(
+    name = "hello",
+    srcs = glob(["**"]),
+    kernel_build = "//common:kernel_aarch64",
+)
+EOF
+
+      # ==============================
+      # 只编译 hello.ko
+      # ==============================
+      - name: 单独编译 ko 模块
         run: |
           cd android-kernel
-          tools/bazel run //common:kernel_aarch64_dist -- --destdir=out/dist
+          tools/bazel build --config=fast //common/drivers/hello:hello
 
+      # ==============================
+      # 上传最终 ko
+      # ==============================
       - name: 上传 ko
         uses: actions/upload-artifact@v4
         with:
           name: hello-ko
-          path: android-kernel/out/android14-6.1/common/drivers/hello/*.ko
+          path: android-kernel/out/android14-6.1/common/drivers/hello/hello.ko
