@@ -38,15 +38,18 @@ jobs:
         run: |
           cd android-kernel
           mkdir -p common/drivers/hello
-          # 拷贝你的源码
-          cp ../hello.c common/drivers/hello/
           
-          # 创建 Kbuild 文件
+          # 1. 拷贝源码 (确保路径正确)
+          if [ -f "../hello.c" ]; then
+            cp ../hello.c common/drivers/hello/
+          fi
+          
+          # 2. 创建 Kbuild 文件
           echo "obj-m += hello.o" > common/drivers/hello/Kbuild
 
-          # 创建 BUILD 文件 (Kleaf 标准)
+          # 3. 创建 BUILD 文件 (通过管道符 | 确保此处的 cat <<EOF 被正确解析)
           cat <<EOF > common/drivers/hello/BUILD
-load("//build/kernel/kleaf:kernel.bzl", "kernel_module")
+  load("//build/kernel/kleaf:kernel.bzl", "kernel_module")
 
 kernel_module(
     name = "hello_module",
@@ -54,18 +57,17 @@ kernel_module(
     outs = ["hello.ko"],
     kernel_build = "//common:kernel_aarch64",
 )
-EOF
+EOF  
 
       - name: 单独编译 ko 文件
         run: |
           cd android-kernel
-          # 使用 bazel 直接构建模块，不编译整个内核镜像
-          # --config=fast 是 Kleaf 提供的快速编译选项
+          # 仅使用 Bazel 编译定义的模块目标
           tools/bazel build --config=fast //common/drivers/hello:hello_module
 
       - name: 上传 ko
         uses: actions/upload-artifact@v4
         with:
           name: hello-ko
-          # 编译后的产物在 bazel-bin 对应的目录下
+          # 编译产物位于 bazel-bin 下的对应路径
           path: android-kernel/bazel-bin/common/drivers/hello/hello.ko
