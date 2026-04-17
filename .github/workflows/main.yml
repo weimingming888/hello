@@ -6,19 +6,21 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 拉取你的代码
+      - name: 拉取你的驱动代码
         uses: actions/checkout@v4
 
-      - name: 安装编译工具
+      - name: 安装编译环境
         run: |
           sudo apt update
-          sudo apt install -y git bc bison flex libssl-dev make gcc-aarch64-linux-gnu
+          sudo apt install -y bc bison flex libssl-dev make gcc-aarch64-linux-gnu
 
-      - name: 下载 GKI 内核预编译头文件（超快）
+      - name: 下载官方 GKI 内核编译组件
         run: |
-          git clone --depth=1 https://github.com/thankyou-android/android14-6.1-gki.git kernel
+          wget -O kernel.tar.gz https://github.com/topjohnwu/android-kernel-prebuilt/releases/download/android14-6.1/kernel.tar.gz
+          tar -zxf kernel.tar.gz
+          mv usr/src/kernel-6.1 kernel
 
-      - name: 极速编译 ko 模块
+      - name: 仅编译 ko 模块（超快）
         run: |
           make -C kernel \
             ARCH=arm64 \
@@ -26,7 +28,7 @@ jobs:
             M=$PWD \
             modules
 
-      - name: 上传最终 ko 文件
+      - name: 上传编译好的 hello.ko
         uses: actions/upload-artifact@v4
         with:
           name: hello_ko
