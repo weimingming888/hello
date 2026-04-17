@@ -1,40 +1,47 @@
 name: Android14-6.1-KO
-
 on:
-  workflow_dispatch: # 手动触发
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout 驱动代码
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+
+      - name: 缓存内核源码
+        id: cache-kernel
+        uses: actions/cache@v4
+        with:
+          path: android-kernel
+          key: kernel-android14-6.1
 
       - name: 安装 repo
         run: |
           curl https://storage.googleapis.com/git-repo-downloads/repo > /usr/local/bin/repo
           chmod a+x /usr/local/bin/repo
 
-      - name: 拉取 Android14-6.1 内核源码
+      - name: 拉取 Android14-6.1 内核
+        if: steps.cache-kernel.outputs.cache-hit != 'true'
         run: |
           mkdir -p android-kernel && cd android-kernel
           repo init -u https://android.googlesource.com/kernel/manifest -b common-android14-6.1 --no-repo-verify --depth=1
           repo sync --force-sync --no-clone-bundle --no-tags -j32
 
-      - name: 放入驱动并配置编译
+      # 👇👇👇 这里是修复重点！直接复制你的驱动文件
+      - name: 放入驱动
         run: |
           cd android-kernel
-          mkdir -p common/drivers
-          cp -r ../kerneldriver common/drivers/
-          echo "obj-y += kerneldriver/" >> common/drivers/Makefile
+          mkdir -p common/drivers/hello
+          cp ../hello.c ../Makefile common/drivers/hello/
+          echo "obj-y += hello/" >> common/drivers/Makefile
 
-      - name: Bazel 编译内核与模块
+      - name: 编译 ko
         run: |
           cd android-kernel
           tools/bazel run //common:kernel_aarch64_dist -- --destdir=out/dist
 
-      - name: 上传 ko 驱动
+      - name: 上传 ko
         uses: actions/upload-artifact@v4
         with:
-          name: mydriver-ko
-          path: android-kernel/out/android14-6.1/common/drivers/kerneldriver/*.ko
+          name: hello-ko
+          path: android-kernel/out/android14-6.1/common/drivers/hello/*.ko
