@@ -1,4 +1,4 @@
-name: Android14-6.1-KO
+name: 极速编译 hello.ko (Android14-6.1)
 on:
   workflow_dispatch:
 
@@ -6,42 +6,28 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: 拉取你的代码
+        uses: actions/checkout@v4
 
-      - name: 缓存内核源码
-        id: cache-kernel
-        uses: actions/cache@v4
-        with:
-          path: android-kernel
-          key: kernel-android14-6.1
-
-      - name: 安装 repo
+      - name: 安装编译工具
         run: |
-          curl https://storage.googleapis.com/git-repo-downloads/repo > /usr/local/bin/repo
-          chmod a+x /usr/local/bin/repo
+          sudo apt update
+          sudo apt install -y git bc bison flex libssl-dev make gcc-aarch64-linux-gnu
 
-      - name: 拉取 Android14-6.1 内核
-        if: steps.cache-kernel.outputs.cache-hit != 'true'
+      - name: 下载 GKI 内核预编译头文件（超快）
         run: |
-          mkdir -p android-kernel && cd android-kernel
-          repo init -u https://android.googlesource.com/kernel/manifest -b common-android14-6.1 --no-repo-verify --depth=1
-          repo sync --force-sync --no-clone-bundle --no-tags -j32
+          git clone --depth=1 https://github.com/thankyou-android/android14-6.1-gki.git kernel
 
-      # 👇👇👇 这里是修复重点！直接复制你的驱动文件
-      - name: 放入驱动
+      - name: 极速编译 ko 模块
         run: |
-          cd android-kernel
-          mkdir -p common/drivers/hello
-          cp ../hello.c ../Makefile common/drivers/hello/
-          echo "obj-y += hello/" >> common/drivers/Makefile
+          make -C kernel \
+            ARCH=arm64 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            M=$PWD \
+            modules
 
-      - name: 编译 ko
-        run: |
-          cd android-kernel
-          tools/bazel run //common:kernel_aarch64_dist -- --destdir=out/dist
-
-      - name: 上传 ko
+      - name: 上传最终 ko 文件
         uses: actions/upload-artifact@v4
         with:
-          name: hello-ko
-          path: android-kernel/out/android14-6.1/common/drivers/hello/*.ko
+          name: hello_ko
+          path: ./*.ko
