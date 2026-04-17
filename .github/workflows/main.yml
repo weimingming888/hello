@@ -8,8 +8,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # 🔴 必须步骤：清理磁盘，否则 Repo Sync 会失败
-      - name: Free Disk Space
+      - name: 清理磁盘空间
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
           sudo apt-get clean
@@ -23,9 +22,8 @@ jobs:
 
       - name: 安装依赖与 repo
         run: |
-          sudo curl https://storage.googleapis.com/git-repo-downloads/repo > /usr/local/bin/repo
+          sudo curl https://googleapis.com > /usr/local/bin/repo
           sudo chmod a+x /usr/local/bin/repo
-          # 配置 Git，Repo 必须
           git config --global user.email "you@example.com"
           git config --global user.name "Your Name"
 
@@ -33,42 +31,41 @@ jobs:
         if: steps.cache-kernel.outputs.cache-hit != 'true'
         run: |
           mkdir -p android-kernel && cd android-kernel
-          repo init -u https://android.googlesource.com/kernel/manifest -b common-android14-6.1 --depth=1
+          repo init -u https://googlesource.com -b common-android14-6.1 --depth=1
           repo sync --force-sync -j$(nproc)
 
-      - name: 放入驱动
+      - name: 放入驱动并创建构建配置
         run: |
           cd android-kernel
           mkdir -p common/drivers/hello
-          # 确保根目录有 hello.c 和 Makefile
-          cp ../hello.c ../Makefile common/drivers/hello/
-          # 如果你的 Makefile 内容不是针对内核树的，强制写入一个通用的 Kbuild
+          # 拷贝你的源码
+          cp ../hello.c common/drivers/hello/
+          
+          # 创建 Kbuild 文件
           echo "obj-m += hello.o" > common/drivers/hello/Kbuild
 
-      # 🛠️ 关键步骤：不编译内核，只准备编译环境
-      - name: 准备编译环境
-        run: |
-          cd android-kernel
-          # 这步非常快，只生成头文件和编译脚本，不编译内核镜像
-          tools/bazel build --config=fast //common:kernel_aarch64_prepare
+          # 创建 BUILD 文件 (Kleaf 标准)
+          cat <<EOF > common/drivers/hello/BUILD
+load("//build/kernel/kleaf:kernel.bzl", "kernel_module")
 
-      - name: 使用 Make 单独编译 KO
+kernel_module(
+    name = "hello_module",
+    srcs = glob(["**"]),
+    outs = ["hello.ko"],
+    kernel_build = "//common:kernel_aarch64",
+)
+EOF
+
+      - name: 单独编译 ko 文件
         run: |
           cd android-kernel
-          # 获取 Bazel 准备好的内核源码路径
-          KERNEL_SRC=$(pwd)/common
-          OUT_DIR=$(pwd)/out/make_out
-          mkdir -p $OUT_DIR
-          
-          # 使用内核提供的 make 命令，交叉编译工具链由 Kleaf 自动处理
-          # 注意：这里直接调用 make，指向驱动所在目录
-          tools/bazel run //common:kernel_aarch64_make -- \
-            M=drivers/hello \
-            modules
+          # 使用 bazel 直接构建模块，不编译整个内核镜像
+          # --config=fast 是 Kleaf 提供的快速编译选项
+          tools/bazel build --config=fast //common/drivers/hello:hello_module
 
       - name: 上传 ko
         uses: actions/upload-artifact@v4
         with:
           name: hello-ko
-          # 编译后的 ko 会在驱动所在目录
-          path: android-kernel/common/drivers/hello/*.ko
+          # 编译后的产物在 bazel-bin 对应的目录下
+          path: android-kernel/bazel-bin/common/drivers/hello/hello.ko
