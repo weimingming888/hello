@@ -27,34 +27,34 @@ jobs:
           repo init -u https://android.googlesource.com/kernel/manifest -b common-android14-6.1 --no-repo-verify --depth=1
           repo sync --force-sync --no-clone-bundle --no-tags -j32
 
-      # 👇 你的原有代码完全保留 + 自动补全 Bazel 必须文件
       - name: 放入驱动 + 自动生成编译配置
         run: |
           cd android-kernel
           mkdir -p common/drivers/hello
-          cp ../hello.c ../Makefile common/drivers/hello/
-          echo "obj-y += hello/" >> common/drivers/Makefile
+          # 只拷贝源码文件
+          cp ../hello.c common/drivers/hello/
 
-          # 自动创建 Kbuild
+          # 1. 自动创建 Kbuild
           echo "obj-m += hello.o" > common/drivers/hello/Kbuild
 
-          # 自动创建 Bazel BUILD 文件（不会报错的纯文本写法）
+          # 2. 自动创建 Bazel BUILD 文件 (修复版：添加了 outs 属性)
           echo 'load("//build/kernel/kleaf:kernel.bzl", "kernel_module")' > common/drivers/hello/BUILD
           echo 'kernel_module(' >> common/drivers/hello/BUILD
           echo '    name = "hello",' >> common/drivers/hello/BUILD
           echo '    srcs = glob(["**"]),' >> common/drivers/hello/BUILD
+          echo '    outs = ["hello.ko"],' >> common/drivers/hello/BUILD
           echo '    kernel_build = "//common:kernel_aarch64",' >> common/drivers/hello/BUILD
           echo ')' >> common/drivers/hello/BUILD
 
-      # 👇 单独只编译 ko 文件
       - name: 单独编译 hello.ko
         run: |
           cd android-kernel
+          # 仅编译驱动模块，不触发内核主树校验
           tools/bazel build --config=fast //common/drivers/hello:hello
 
-      # 👇 自动上传编译好的 ko
       - name: 上传 ko
         uses: actions/upload-artifact@v4
         with:
           name: hello-ko
-          path: android-kernel/out/android14-6.1/common/drivers/hello/hello.ko
+          # 修正路径：Bazel 产物在 bazel-bin 下，不在 out 下
+          path: android-kernel/bazel-bin/common/drivers/hello/hello.ko
