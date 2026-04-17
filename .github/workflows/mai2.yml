@@ -13,36 +13,35 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
           sudo apt-get clean
 
-      - name: 缓存构建环境
+      - name: 缓存内核与构建环境
         id: cache-kernel
         uses: actions/cache@v4
         with:
           path: |
             android-kernel
             ~/.cache/bazel
+          # 使用 hello.c 的 hash 作为 key，确保代码变化时能识别，同时利用旧缓存
           key: kernel-14-6.1-fast-${{ hashFiles('hello.c') }}
           restore-keys: |
             kernel-14-6.1-fast-
 
       - name: 安装 repo
         run: |
-          # 修正后的官方下载地址，防止下载到 HTML 报错页
-          sudo curl https://googleapis.com > /usr/local/bin/repo
+          sudo curl https://storage.googleapis.com/git-repo-downloads/repo > /usr/local/bin/repo
           sudo chmod a+x /usr/local/bin/repo
           git config --global user.email "bot@example.com"
           git config --global user.name "bot"
 
-      - name: 拉取内核源码 (仅限无缓存时)
+      - name: 拉取 Android14-6.1 内核
         if: steps.cache-kernel.outputs.cache-hit != 'true'
         run: |
           mkdir -p android-kernel && cd android-kernel
-          # 修正后的 Google 官方清单地址
-          repo init -u https://googlesource.com -b common-android14-6.1 --depth=1
-          repo sync -c -j8 --no-clone-bundle --no-tags
+          repo init -u https://android.googlesource.com/kernel/manifest -b common-android14-6.1 --no-repo-verify --depth=1
+          repo sync --force-sync --no-clone-bundle --no-tags -j32
           # 🔴 关键：必须删掉 .repo 释放空间，否则缓存会因超过 10GB 被 GitHub 丢弃
           rm -rf .repo 
 
-      - name: 准备驱动 (使用 printf 生成配置)
+      - name: 准备驱动 (修正文件生成)
         run: |
           cd android-kernel
           mkdir -p common/drivers/hello
@@ -50,12 +49,15 @@ jobs:
           # 拷贝源码
           if [ -f "../hello.c" ]; then
             cp ../hello.c common/drivers/hello/
+          else
+            echo '#include <linux/module.h>\n#include <linux/kernel.h>\nMODULE_LICENSE("GPL");\nint init_module(void){return 0;}\nvoid cleanup_module(void){}' > common/drivers/hello/hello.c
           fi
           
-          # 1. 使用 printf 生成 Kbuild
-          printf 'obj-m += hello.o\n' > common/drivers/hello/Kbuild
+          # 写入 Kbuild 和 Makefile 确保双重兼容
+          printf "obj-m += hello.o\n" > common/drivers/hello/Kbuild
+          printf "obj-m += hello.o\n" > common/drivers/hello/Makefile
 
-          # 2. 使用 printf 生成 BUILD 文件 (避开 cat 语法陷阱)
+          # 使用 printf 生成 Bazel BUILD 文件，避免 EOF 语法陷阱
           printf 'load("//build/kernel/kleaf:kernel.bzl", "kernel_module")\n\n' > common/drivers/hello/BUILD
           printf 'kernel_module(\n' >> common/drivers/hello/BUILD
           printf '    name = "hello",\n' >> common/drivers/hello/BUILD
@@ -67,10 +69,10 @@ jobs:
       - name: 🚀 极速编译单模块
         run: |
           cd android-kernel
-          # 显式指定 --disk_cache 路径以利用 GitHub 缓存
+          # 使用 --disk_cache 关联我们缓存的路径
           tools/bazel build --config=fast --disk_cache=~/.cache/bazel //common/drivers/hello:hello
 
-      - name: 上传产物
+      - name: 上传 ko
         if: success()
         uses: actions/upload-artifact@v4
         with:
