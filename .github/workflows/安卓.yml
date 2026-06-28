@@ -16,36 +16,33 @@ jobs:
           sudo apt update
           sudo apt install -y build-essential bison flex libssl-dev libelf-dev git
 
-      # 拉取Google官方Android Clang工具链
-      - name: Download Android Clang
+      # 预编译clang，不源码编译
+      - name: Download Android Prebuilt Clang 17
         run: |
-          git clone --depth=1 https://github.com/llvm/llvm-project.git clang
-          cd clang
-          mkdir build && cd build
-          cmake -DLLVM_ENABLE_PROJECTS=clang -DCMAKE_BUILD_TYPE=Release ../llvm
-          make -j$(nproc)
-          echo "CLANG_PATH=$PWD/bin" >> $GITHUB_ENV
+          wget https://dl.google.com/android/ndk/android-ndk-r27c-linux.zip
+          unzip android-ndk-r27c-linux.zip
+          echo "PATH=$PWD/android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH" >> $GITHUB_ENV
 
-      # 拉取对应安卓内核（示例GKI 5.10，替换你的设备内核仓库）
+      # 拉取内核源码
       - name: Pull Android Kernel Source
         run: |
           git clone --depth=1 --branch android14-6.1 https://android.googlesource.com/kernel/common kernel
           cd kernel
-          # 这里替换成你手机导出的config.gz
-          wget https://你的仓库地址/设备.config -O .config
+          # 直接复制仓库里本地的config，无任何网络URL
+          cp ../device.config .config
 
-      # 内核预编译
+      # 内核预处理
       - name: Prepare kernel
         run: |
           cd kernel
-          export PATH=${{ env.CLANG_PATH }}:$PATH
+          export PATH=${{ env.PATH }}
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 olddefconfig
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 modules_prepare -j$(nproc)
 
-      # 交叉编译ARM64 ko
+      # 编译ko
       - name: Compile KO
         run: |
-          export PATH=${{ env.CLANG_PATH }}:$PATH
+          export PATH=${{ env.PATH }}
           make -j$(nproc) KDIR=./kernel ARCH=arm64 LLVM=1
 
       # 上传产物
