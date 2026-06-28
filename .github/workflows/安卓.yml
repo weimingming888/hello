@@ -49,11 +49,20 @@ jobs:
           done
           ls /usr/include/libelf.h
 
-      # 拉取内核源码
-      - name: Pull Kernel Source
+      # 拉取内核源码 + 切换到 6.1.75 版本（关键修改）
+      - name: Pull Kernel Source match 6.1.75
         run: |
           git clone --depth=1 --branch android14-6.1 https://android.googlesource.com/kernel/common kernel
           cd kernel
+          # 查找包含 6.1.75 的提交
+          git fetch --unshallow
+          COMMIT=$(git log --grep="6\.1\.75" --oneline | head -n1 | awk '{print $1}')
+          if [ -z "$COMMIT" ]; then
+            echo "警告：未找到6.1.75提交，使用分支最新版，仍会版本不匹配死机"
+          else
+            git checkout $COMMIT
+            echo "已切换到6.1.75对应提交: $COMMIT"
+          fi
           cp ../device.config .config
 
       # 内核预处理：屏蔽符号裁剪，彻底解决abi_symbollist.raw报错
@@ -73,12 +82,16 @@ jobs:
 
           make ARCH=arm64 CC=clang CXX=clang++ LD=ld.lld LLVM=1 LLVM_IAS=1 olddefconfig
           make ARCH=arm64 CC=clang CXX=clang++ LD=ld.lld LLVM=1 LLVM_IAS=1 modules_prepare -j$(nproc)
+          # 打印编译内核版本，确认是否为6.1.75
+          cat include/generated/utsrelease.h
 
       # 编译外部KO模块
       - name: Build KO Module
         run: |
           export PATH=${{ env.PATH }}
           make -j$(nproc) KDIR=./kernel ARCH=arm64 CC=clang CXX=clang++ LD=ld.lld LLVM=1
+          # 编译完成直接打印模块 vermagic，方便核对
+          modinfo hello.ko || true
 
       # 上传编译产物
       - name: Upload KO File
