@@ -1,4 +1,4 @@
-name: Android14-6.1-KO
+name: Android14-6.1-KO 优化
 on:
   workflow_dispatch:
 
