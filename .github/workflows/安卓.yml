@@ -14,9 +14,9 @@ jobs:
       - name: Install Full LLVM 17 Toolchain & System Dependencies
         run: |
           sudo apt update -y
-          # 预装所有内核编译依赖，解决libelf.h、bpf编译依赖
+          # 修正：Ubuntu 使用 libssl-dev，不存在 openssl-dev
           sudo apt install -y libelf-dev elfutils libarchive-dev zlib1g-dev \
-            libcap-dev libncurses-dev bison flex openssl-dev libssl-dev bc
+            libcap-dev libncurses-dev bison flex libssl-dev bc
 
           # 清华镜像一键安装完整 llvm17
           wget https://mirrors.tuna.tsinghua.edu.cn/llvm-apt/llvm.sh
