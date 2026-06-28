@@ -8,15 +8,15 @@ jobs:
   build-gki-module:
     runs-on: ubuntu-latest
     steps:
-      # 1. 拉取驱动源码（hello.c 放在仓库根目录）
+      # 1. 拉取驱动源码（hello.c 仓库根目录）
       - name: Checkout custom module source
         uses: actions/checkout@v4
 
-      # 2. 安装系统依赖 + repo工具，补充git全局配置
+      # 2. 系统依赖 + repo 安装 + git 全局配置
       - name: Install build dependencies & repo
         run: |
           sudo apt update -y
-          sudo apt install -y git python3 python-is-python3 bison flex libncurses-dev bc libelf elfutils unzip curl build-essential zip
+          sudo apt install -y git python3 python-is-python3 bison flex libncurses-dev bc libelf-dev elfutils unzip curl build-essential zip
           git config --global user.name "github-actions"
           git config --global user.email "actions@github.com"
           mkdir -p ~/bin
@@ -24,15 +24,19 @@ jobs:
           chmod a+x ~/bin/repo
           echo "$HOME/bin" >> $GITHUB_PATH
 
-      # 3. Repo 拉取完整 android14-6.1 ACK 内核，增加重试机制
+      # 3. Repo 同步 android14-6.1 ACK 内核 三重重试
       - name: Repo sync kernel android14-6.1
         run: |
-          mkdir kernel
+          mkdir -p kernel
           cd kernel
-          repo init -u https://android.googlesource.com/kernel/manifest -b android14-6.1
+          repo init -u https://android.googlesource.com/kernel/manifest -b android14-6.1 --depth=1
           repo sync -j$(nproc) || repo sync -j$(nproc) || repo sync -j$(nproc)
+        env:
+          # 缓解Google源访问超时
+          GIT_HTTP_LOW_SPEED_LIMIT: 1024
+          GIT_HTTP_LOW_SPEED_TIME: 120
 
-      # 4. 部署自定义内核模块，修复EOF爆红问题
+      # 4. 部署GKI模块 单引号EOF防止YAML变量插值爆红（关键修复）
       - name: Prepare hello GKI module
         run: |
           cd kernel
@@ -46,7 +50,6 @@ ddk_module(
     srcs = ["hello.c"],
     out = "hello.ko",
     kernel_build = "//:kernel_aarch64",
-    deps = ["//:kernel_aarch64"],
     gki_module = True,
     copts = [
         "-std=gnu11",
@@ -55,21 +58,27 @@ ddk_module(
 )
 EOF
 
-      # 5. Kleaf Bazel 编译 arm64 GKI 模块
+      # 5. Bazel Kleaf 编译arm64 GKI模块（精简官方平台参数）
       - name: Build GKI module with official toolchain
         run: |
           cd kernel
           chmod +x ./tools/bazel
-          ./tools/bazel build --platforms=//build/kernel/kleaf:kernel_aarch64_platform //modules/hello_mod:hello
+          ./tools/bazel build //modules/hello_mod:hello --config=kernel_aarch64
 
-      # 6. 自动搜索ko，兼容所有编译变体
+      # 6. 提取编译产物，校验ko是否生成
       - name: Extract compiled ko artifact
         run: |
-          find kernel/bazel-out -name "hello.ko" -type f -exec cp {} ./ \;
+          set -e
+          KO_PATH=$(find kernel/bazel-out -name "hello.ko" -type f | head -n1)
+          if [ -z "$KO_PATH" ]; then
+            echo "ERROR: hello.ko not found, build failed!"
+            exit 1
+          fi
+          cp "$KO_PATH" ./
           ls -lh hello.ko
           modinfo hello.ko || echo "modinfo skip: cross-compile arch mismatch"
 
-      # 7. 上传产物
+      # 7. 上传编译ko产物
       - name: Upload compiled KO
         uses: actions/upload-artifact@v4
         with:
