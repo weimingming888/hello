@@ -13,17 +13,23 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
           sudo apt-get clean
 
-      - name: 缓存内核与构建环境
-        id: cache-kernel
+      # 缓存1：内核源码，固定key，内核本身不变就永远复用
+      - name: 缓存内核源码
+        id: cache-src
         uses: actions/cache@v4
         with:
-          path: |
-            android-kernel
-            ~/.cache/bazel
-          # 使用 hello.c 的 hash 作为 key，源码变动自动重建缓存
-          key: kernel-14-6.1-fast-${{ hashFiles('hello.c') }}
+          path: android-kernel
+          key: kernel-src-a14-6.1
+
+      # 缓存2：Bazel编译产物，hello.c改动才失效
+      - name: 缓存Bazel编译环境
+        id: cache-bazel
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/bazel
+          key: bazel-cache-a14-6.1-${{ hashFiles('hello.c') }}
           restore-keys: |
-            kernel-14-6.1-fast-
+            bazel-cache-a14-6.1-
 
       - name: 安装 repo
         run: |
@@ -33,13 +39,24 @@ jobs:
           git config --global user.name "bot"
 
       - name: 拉取 Android14-6.1 内核
-        if: steps.cache-kernel.outputs.cache-hit != 'true'
+        if: steps.cache-src.outputs.cache-hit != 'true'
         run: |
           mkdir -p android-kernel && cd android-kernel
           repo init -u https://android.googlesource.com/kernel/manifest -b common-android14-6.1 --no-repo-verify --depth=1
           repo sync --force-sync --no-clone-bundle --no-tags -j32
-          # 删除 .repo 减小缓存体积，防止超10G被GitHub清理
-          rm -rf .repo 
+          # 删除 .repo 缩小缓存避免超限
+          rm -rf .repo
+
+      # 预编译内核主目标，只缺失时执行一次，后续直接复用
+      - name: 预构建内核基础环境（避免每次重编完整内核）
+        run: |
+          cd android-kernel
+          tools/bazel build \
+            --config=fast \
+            --disk_cache=~/.cache/bazel \
+            --nokmi_symbol_list_violations_check \
+            --no_abi_generation \
+            //common:kernel_aarch64
 
       - name: 准备驱动 (修正文件生成，适配Kleaf规范)
         run: |
@@ -69,7 +86,14 @@ jobs:
       - name: 🚀 极速编译单模块
         run: |
           cd android-kernel
-          tools/bazel build --config=fast --disk_cache=~/.cache/bazel //common/drivers/hello:hello
+          tools/bazel build \
+            --config=fast \
+            --disk_cache=~/.cache/bazel \
+            --jobs=$(nproc) \
+            --local_ram_resources=HIGH \
+            --nokmi_symbol_list_violations_check \
+            --no_abi_generation \
+            //common/drivers/hello:hello
 
       - name: 上传 ko
         if: success()
