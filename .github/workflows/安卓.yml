@@ -10,19 +10,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # 完整依赖安装 + LLVM17 软链接
+      # 完整依赖 + 修复llvm.sh 404（改用官方源apt.llvm.org）
       - name: Install Full LLVM 17 Toolchain & System Dependencies
         run: |
           sudo apt update -y
           sudo apt install -y libelf-dev elfutils libarchive-dev zlib1g-dev \
             libcap-dev libncurses-dev bison flex libssl-dev bc
 
-          # 清华镜像安装 llvm17
-          wget https://mirrors.tuna.tsinghua.edu.cn/llvm.sh
+          # 【修复404】使用官方llvm.sh地址，不再访问清华失效链接
+          wget https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
-          sudo ./llvm.sh 17 all -m https://mirrors.tuna.tsinghua.edu.cn/llvm-apt
+          sudo ./llvm.sh 17 all
 
-          # 统一软链接无版本后缀
+          # 全局软链接 clang17 -> clang
           TOOLS=(
             clang clang++ lld ld.lld
             llvm-ar llvm-nm llvm-objcopy llvm-strip llvm-objdump
@@ -34,7 +34,7 @@ jobs:
           done
 
           echo "PATH=/usr/bin:$PATH" >> $GITHUB_ENV
-          # 校验工具
+          # 校验工具完整性
           echo "===== Verify all LLVM tools ====="
           for tool in "${TOOLS[@]}"; do
             if command -v $tool &>/dev/null; then
@@ -45,13 +45,13 @@ jobs:
             fi
           done
 
-      # 拉取一加内核源码
+      # 拉取一加SM8650 6.1内核
       - name: Pull Kernel Source
         run: |
           git clone --depth=1 --branch oneplus/sm8650_v_15.0.0_oneplus12 https://github.com/cctv18/android_kernel_common_oneplus_sm8650 kernel
           cp ../device.config kernel/.config
 
-      # 内核预处理【强制KBUILD_CFLAGS锁定gnu11 + thin LTO】
+      # 内核预处理：强制gnu11 + thin LTO，关闭符号裁剪
       - name: Prepare Kernel Modules
         run: |
           cd kernel
@@ -61,22 +61,26 @@ jobs:
           export LLVM_OBJCOPY=llvm-objcopy
           export LLVM_STRIP=llvm-strip
 
-          # 关闭未使用符号裁剪
+          # 关闭KSYM裁剪，避免CRC不匹配
           sed -i 's/^CONFIG_TRIM_UNUSED_KSYMS=y/# CONFIG_TRIM_UNUSED_KSYMS is not set/' .config
           sed -i 's|CONFIG_UNUSED_KSYMS_WHITELIST=.*|# CONFIG_UNUSED_KSYMS_WHITELIST is not set|' .config
 
-          # 内核全局强制 gnu11 + thin LTO，对齐手机内核编译参数
+          # 全局锁定gnu11 + thin LTO，和手机内核编译参数对齐
           export KBUILD_CFLAGS="-std=gnu11 -flto=thin"
           export KBUILD_LDFLAGS="-flto=thin"
 
           make ARCH=arm64 CC=clang CXX=clang++ LD=ld.lld LLVM=1 LLVM_IAS=1 olddefconfig
           make ARCH=arm64 CC=clang CXX=clang++ LD=ld.lld LLVM=1 LLVM_IAS=1 prepare
+
+          # 强制内核版本6.1.75
           mkdir -p include/generated
           if [ ! -f include/generated/utsrelease.h ]; then
             echo '#define UTS_RELEASE "6.1.75"' > include/generated/utsrelease.h
           fi
-          sed -i 's/#define UTS_RELEASE ".*"/#define UTS_RELEASE "6.1.75"/' include/generated.h
-          # 模块准备同样锁定标准
+          sed -i 's/#define UTS_RELEASE ".*"/#define UTS_RELEASE "6.1.75"/' include/generated/utsrelease.h
+          echo "Kernel release fixed: $(cat include/generated/utsrelease.h)"
+
+          # 模块依赖预编译（带gnu11参数）
           make ARCH=arm64 CC=clang CXX=clang++ LD=ld.lld LLVM=1 LLVM_IAS=1 modules_prepare -j$(nproc)
 
       # 编译KO：EXTRA_CFLAGS强制gnu11、禁用PI、匹配LTO
@@ -93,7 +97,7 @@ jobs:
             EXTRA_CFLAGS="-std=gnu11 -ffreestanding -fno-pie -fno-plt -flto=thin"
           modinfo hello.ko || true
 
-      # 上传产物
+      # 上传编译产物
       - name: Upload KO File
         uses: actions/upload-artifact@v4
         with:
