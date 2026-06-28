@@ -10,15 +10,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # 替换为稳定安装方案
-      - name: Get Android Clang 17（官方脚本+清华镜像加速）
+      # 完整安装LLVM17，补齐ld.lld并建立软链接
+      - name: Get Android Clang 17（完整工具链含ld.lld）
         run: |
           sudo apt update -y
           wget https://mirrors.tuna.tsinghua.edu.cn/llvm-apt/llvm.sh
           chmod +x llvm.sh
           sudo ./llvm.sh 17 all -m https://mirrors.tuna.tsinghua.edu.cn/llvm-apt
+
+          # 全局软链接，让make直接识别clang、ld.lld
+          sudo ln -sf /usr/bin/clang-17 /usr/bin/clang
+          sudo ln -sf /usr/bin/clang++-17 /usr/bin/clang++
+          sudo ln -sf /usr/bin/lld-17 /usr/bin/lld
+          sudo ln -sf /usr/bin/ld.lld-17 /usr/bin/ld.lld
+
           echo "PATH=/usr/bin:$PATH" >> $GITHUB_ENV
-          clang-17 --version
+          # 校验是否安装成功
+          clang --version
+          ld.lld --version
 
       # 拉取内核源码
       - name: Pull Kernel Source
@@ -27,19 +36,19 @@ jobs:
           cd kernel
           cp ../device.config .config
 
-      # 内核预处理
+      # 内核预处理，显式指定编译器与链接器
       - name: Prepare Kernel Modules
         run: |
           cd kernel
           export PATH=${{ env.PATH }}
-          make ARCH=arm64 LLVM=1 LLVM_IAS=1 olddefconfig
-          make ARCH=arm64 LLVM=1 LLVM_IAS=1 modules_prepare -j$(nproc)
+          make ARCH=arm64 CC=clang CXX=clang++ LD=ld.lld LLVM=1 LLVM_IAS=1 olddefconfig
+          make ARCH=arm64 CC=clang CXX=clang++ LD=ld.lld LLVM=1 LLVM_IAS=1 modules_prepare -j$(nproc)
 
-      # 编译ko
+      # 编译ko，同步指定工具链
       - name: Build KO Module
         run: |
           export PATH=${{ env.PATH }}
-          make -j$(nproc) KDIR=./kernel ARCH=arm64 LLVM=1
+          make -j$(nproc) KDIR=./kernel ARCH=arm64 CC=clang CXX=clang++ LD=ld.lld LLVM=1
 
       # 上传产物
       - name: Upload KO File
