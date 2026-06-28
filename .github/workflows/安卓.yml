@@ -10,22 +10,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # 完整安装LLVM17，补齐ld.lld并建立软链接
-      - name: Get Android Clang 17（完整工具链含ld.lld）
+      # 安装系统依赖 + 完整LLVM17 + 补齐所有工具软链接
+      - name: Get Android Clang 17（补齐libelf、llvm-ar、ld.lld全套）
         run: |
           sudo apt update -y
+          # 解决 libelf.h 缺失
+          sudo apt install -y libelf-dev elfutils libarchive-dev zlib1g-dev
+
           wget https://mirrors.tuna.tsinghua.edu.cn/llvm-apt/llvm.sh
           chmod +x llvm.sh
           sudo ./llvm.sh 17 all -m https://mirrors.tuna.tsinghua.edu.cn/llvm-apt
 
+          # 全局软链接：clang clang++ ld.lld lld llvm-ar
           sudo ln -sf /usr/bin/clang-17 /usr/bin/clang
           sudo ln -sf /usr/bin/clang++-17 /usr/bin/clang++
           sudo ln -sf /usr/bin/lld-17 /usr/bin/lld
           sudo ln -sf /usr/bin/ld.lld-17 /usr/bin/ld.lld
+          sudo ln -sf /usr/bin/llvm-ar-17 /usr/bin/llvm-ar
 
           echo "PATH=/usr/bin:$PATH" >> $GITHUB_ENV
+          # 校验工具是否就绪
           clang --version
           ld.lld --version
+          llvm-ar --version
+          ls /usr/include/libelf.h
 
       # 拉取内核源码
       - name: Pull Kernel Source
@@ -34,7 +42,7 @@ jobs:
           cd kernel
           cp ../device.config .config
 
-      # 内核预处理：关闭符号裁剪，彻底消除abi_symbollist.raw依赖
+      # 内核预处理：关闭符号裁剪，消除abi_symbollist.raw报错
       - name: Prepare Kernel Modules
         run: |
           cd kernel
