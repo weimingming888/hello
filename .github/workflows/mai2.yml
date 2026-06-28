@@ -69,8 +69,11 @@ jobs:
             echo '#include <linux/module.h>\n#include <linux/kernel.h>\nMODULE_LICENSE("GPL");\nint init_module(void){return 0;}\nvoid cleanup_module(void){}' > common/drivers/hello/hello.c
           fi
           
-          # Kleaf编译模块仅需Kbuild，删除多余Makefile避免冲突
-          printf "obj-m += hello.o\n" > common/drivers/hello/Kbuild
+          # 替换为标准合规Kbuild，修复make找不到目标报错
+          cat > common/drivers/hello/Kbuild << 'EOF'
+obj-m := hello.o
+hello-objs := hello.o
+EOF
           rm -f common/drivers/hello/Makefile
 
           # 修正BUILD：只编译hello.c，禁止glob匹配全部文件
