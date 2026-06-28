@@ -1,16 +1,29 @@
-#include <linux/init.h>
-#include <linux/module.h>
-MODULE_LICENSE("GPL"); // 必须GPL，否则加载报错
-MODULE_AUTHOR("test");
+ifneq ($(KERNELRELEASE),)
+ccflags-y := -std=gnu11 -ffreestanding -fno-pie -fno-plt
+obj-m += hello.o
+else
+KDIR ?= ./kernel
+ARCH ?= arm64
+CROSS_COMPILE ?=
+LLVM ?= 0
+PWD := $(shell pwd)
 
-static int __init mod_init(void)
-{
-    printk(KERN_INFO "Hello KO Module\n");
-    return 0;
-}
-static void __exit mod_exit(void)
-{
-    printk(KERN_INFO "Exit KO Module\n");
-}
-module_init(mod_init);
-module_exit(mod_exit);
+all:
+ifeq ($(LLVM),1)
+        $(MAKE) -C $(KDIR) \
+        ARCH=$(ARCH) \
+        CC=clang \
+        CXX=clang++ \
+        LD=ld.lld \
+        LLVM=1 \
+        M=$(PWD)
+else
+        $(MAKE) -C $(KDIR) \
+        ARCH=$(ARCH) \
+        CROSS_COMPILE=$(CROSS_COMPILE) \
+        M=$(PWD)
+endif
+
+clean:
+        $(MAKE) -C $(KDIR) M=$(PWD) clean
+endif
