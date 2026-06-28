@@ -20,7 +20,7 @@ jobs:
           path: |
             android-kernel
             ~/.cache/bazel
-          # 使用 hello.c 的 hash 作为 key，确保代码变化时能识别，同时利用旧缓存
+          # 使用 hello.c 的 hash 作为 key，源码变动自动重建缓存
           key: kernel-14-6.1-fast-${{ hashFiles('hello.c') }}
           restore-keys: |
             kernel-14-6.1-fast-
@@ -38,30 +38,30 @@ jobs:
           mkdir -p android-kernel && cd android-kernel
           repo init -u https://android.googlesource.com/kernel/manifest -b common-android14-6.1 --no-repo-verify --depth=1
           repo sync --force-sync --no-clone-bundle --no-tags -j32
-          # 🔴 关键：必须删掉 .repo 释放空间，否则缓存会因超过 10GB 被 GitHub 丢弃
+          # 删除 .repo 减小缓存体积，防止超10G被GitHub清理
           rm -rf .repo 
 
-      - name: 准备驱动 (修正文件生成)
+      - name: 准备驱动 (修正文件生成，适配Kleaf规范)
         run: |
           cd android-kernel
           mkdir -p common/drivers/hello
           
-          # 拷贝源码
+          # 拷贝源码，不存在则自动生成极简GPL驱动兜底
           if [ -f "../hello.c" ]; then
             cp ../hello.c common/drivers/hello/
           else
             echo '#include <linux/module.h>\n#include <linux/kernel.h>\nMODULE_LICENSE("GPL");\nint init_module(void){return 0;}\nvoid cleanup_module(void){}' > common/drivers/hello/hello.c
           fi
           
-          # 写入 Kbuild 和 Makefile 确保双重兼容
+          # Kleaf编译模块仅需Kbuild，删除多余Makefile避免冲突
           printf "obj-m += hello.o\n" > common/drivers/hello/Kbuild
-          printf "obj-m += hello.o\n" > common/drivers/hello/Makefile
+          rm -f common/drivers/hello/Makefile
 
-          # 使用 printf 生成 Bazel BUILD 文件，避免 EOF 语法陷阱
+          # 修正BUILD：只编译hello.c，禁止glob匹配全部文件
           printf 'load("//build/kernel/kleaf:kernel.bzl", "kernel_module")\n\n' > common/drivers/hello/BUILD
           printf 'kernel_module(\n' >> common/drivers/hello/BUILD
           printf '    name = "hello",\n' >> common/drivers/hello/BUILD
-          printf '    srcs = glob(["**"]),\n' >> common/drivers/hello/BUILD
+          printf '    srcs = ["hello.c"],\n' >> common/drivers/hello/BUILD
           printf '    outs = ["hello.ko"],\n' >> common/drivers/hello/BUILD
           printf '    kernel_build = "//common:kernel_aarch64",\n' >> common/drivers/hello/BUILD
           printf ')\n' >> common/drivers/hello/BUILD
@@ -69,7 +69,6 @@ jobs:
       - name: 🚀 极速编译单模块
         run: |
           cd android-kernel
-          # 使用 --disk_cache 关联我们缓存的路径
           tools/bazel build --config=fast --disk_cache=~/.cache/bazel //common/drivers/hello:hello
 
       - name: 上传 ko
