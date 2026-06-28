@@ -1,0 +1,44 @@
+name: Build Linux x86_64 KO
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch: # 支持手动点Run workflow触发
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # 1. 拉取当前仓库代码（你的驱动hello.c+Makefile）
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      # 2. 安装编译全套依赖
+      - name: Install build deps
+        run: |
+          sudo apt update -y
+          sudo apt install -y build-essential libncurses-dev bison flex libssl-dev libelf-dev git wget
+
+      # 3. 下载对应内核源码（示例5.15，替换成你需要的版本）
+      - name: Download kernel source
+        run: |
+          git clone --depth=1 --branch v6.1 https://github.com/torvalds/linux.git kernel
+          cd kernel
+          cp -v /boot/config-$(uname -r) .config # 使用虚拟机自带内核配置
+
+      # 4. 预编译内核模块依赖（必须步骤，生成模块编译环境）
+      - name: Prepare kernel modules
+        run: |
+          cd kernel
+          make olddefconfig
+          make modules_prepare -j$(nproc)
+
+      # 5. 编译你的ko模块
+      - name: Build ko module
+        run: make -j$(nproc) KDIR=./kernel ARCH=x86_64
+
+      # 6. 上传编译产物到Artifact（网页可下载）
+      - name: Upload ko file
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86-ko
+          path: hello.ko
