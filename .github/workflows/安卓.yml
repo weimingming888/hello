@@ -36,11 +36,13 @@ jobs:
           cd kernel
           cp ../device.config .config
 
-      # 内核预处理，显式指定编译器与链接器
+      # 内核预处理，提前创建空abi_symbollist.raw规避报错
       - name: Prepare Kernel Modules
         run: |
           cd kernel
           export PATH=${{ env.PATH }}
+          mkdir -p gki/aarch64/symbols
+          touch gki/aarch64/symbols/abi_symbollist.raw
           make ARCH=arm64 CC=clang CXX=clang++ LD=ld.lld LLVM=1 LLVM_IAS=1 olddefconfig
           make ARCH=arm64 CC=clang CXX=clang++ LD=ld.lld LLVM=1 LLVM_IAS=1 modules_prepare -j$(nproc)
 
