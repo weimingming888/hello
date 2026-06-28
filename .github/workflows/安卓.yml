@@ -1,4 +1,4 @@
-name: Build Android ARM64 KO (Find nearest 6.1.75)
+name: Build Android ARM64 KO
 on:
   push:
     branches: [ main ]
@@ -44,39 +44,14 @@ jobs:
           done
           ls /usr/include/libelf.h
 
-      # 浅克隆内核，不拉全历史，杜绝长时间卡死
-      - name: Pull Kernel Source & Search nearest 6.1.75 commit
+      # 普通浅克隆，无任何异常git操作，不会卡住、不会报错
+      - name: Pull Kernel Source
         run: |
           git clone --depth=1 --branch android14-6.1 https://android.googlesource.com/kernel/common kernel
           cd kernel
           cp ../device.config .config
 
-          # 增量拉取版本号文件历史，体积小、速度快，不会卡死
-          git fetch origin android14-6.1 --shallow-exclude=HEAD --deepen=800 include/Makefile
-          echo "======== 遍历查找小于等于6.1.75最近提交 ========"
-          # 遍历修改内核版本的提交，匹配 6.1.x 小于等于75
-          COMMIT_LIST=$(git log --oneline -- include/Makefile)
-          FOUND_COMMIT=""
-          while IFS= read -r line; do
-            SHA=$(echo $line | awk '{print $1}')
-            git show $SHA:include/Makefile > tmp_make.txt
-            SUB_VER=$(grep -oP 'SUBLEVEL = \K\d+' tmp_make.txt || true)
-            if [[ -n "$SUB_VER" && "$SUB_VER" -le 75 ]]; then
-              FOUND_COMMIT=$SHA
-              echo "找到匹配提交: $SHA , 补丁号 6.1.$SUB_VER"
-              break
-            fi
-          done <<< "$COMMIT_LIST"
-
-          if [[ -n "$FOUND_COMMIT" ]]; then
-            git checkout $FOUND_COMMIT
-            echo "已切换到最接近6.1.75提交: $FOUND_COMMIT"
-          else
-            echo "未找到<=75补丁号，使用分支最新版本"
-          fi
-          rm -f tmp_make.txt
-
-      # 内核预处理：屏蔽符号裁剪，解决abi_symbollist.raw报错
+      # 内核预处理 + 可选强制修改版本号为6.1.75
       - name: Prepare Kernel Modules
         run: |
           cd kernel
@@ -90,6 +65,11 @@ jobs:
           sed -i 's|CONFIG_UNUSED_KSYMS_WHITELIST=.*|# CONFIG_UNUSED_KSYMS_WHITELIST is not set|' .config
 
           make ARCH=arm64 CC=clang CXX=clang++ LD=ld.lld LLVM=1 LLVM_IAS=1 olddefconfig
+
+          # ========== 开启下面两行就会强制vermagic=6.1.75，骗过版本校验 ==========
+          # sed -i 's/#define UTS_RELEASE ".*"/#define UTS_RELEASE "6.1.75"/' include/generated/utsrelease.h
+          # echo "已强制修改内核版本为 6.1.75"
+
           make ARCH=arm64 CC=clang CXX=clang++ LD=ld.lld LLVM=1 LLVM_IAS=1 modules_prepare -j$(nproc)
           cat include/generated/utsrelease.h
 
