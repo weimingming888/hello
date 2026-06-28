@@ -10,29 +10,43 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # 安装系统依赖 + 完整LLVM17 + 补齐所有工具软链接
-      - name: Get Android Clang 17（补齐libelf、llvm-ar、ld.lld全套）
+      # 完整依赖安装 + 全套LLVM17软链接，一次性杜绝所有llvm-xxx缺失
+      - name: Install Full LLVM 17 Toolchain & System Dependencies
         run: |
           sudo apt update -y
-          # 解决 libelf.h 缺失
-          sudo apt install -y libelf-dev elfutils libarchive-dev zlib1g-dev
+          # 预装所有内核编译依赖，解决libelf.h、bpf编译依赖
+          sudo apt install -y libelf-dev elfutils libarchive-dev zlib1g-dev \
+            libcap-dev libncurses-dev bison flex openssl-dev libssl-dev bc
 
+          # 清华镜像一键安装完整 llvm17
           wget https://mirrors.tuna.tsinghua.edu.cn/llvm-apt/llvm.sh
           chmod +x llvm.sh
           sudo ./llvm.sh 17 all -m https://mirrors.tuna.tsinghua.edu.cn/llvm-apt
 
-          # 全局软链接：clang clang++ ld.lld lld llvm-ar
-          sudo ln -sf /usr/bin/clang-17 /usr/bin/clang
-          sudo ln -sf /usr/bin/clang++-17 /usr/bin/clang++
-          sudo ln -sf /usr/bin/lld-17 /usr/bin/lld
-          sudo ln -sf /usr/bin/ld.lld-17 /usr/bin/ld.lld
-          sudo ln -sf /usr/bin/llvm-ar-17 /usr/bin/llvm-ar
+          # ==================== 全套软链接（内核LLVM=1编译所有必备工具）====================
+          TOOLS=(
+            clang clang++ lld ld.lld
+            llvm-ar llvm-nm llvm-objcopy llvm-strip llvm-objdump
+            llvm-readelf llvm-readobj llvm-size llvm-strings llvm-cxxfilt
+            llvm-as llvm-dis llvm-link llvm-mc llvm-ranlib llvm-symbolizer
+          )
+          for tool in "${TOOLS[@]}"; do
+            sudo ln -sf /usr/bin/${tool}-17 /usr/bin/$tool
+          done
 
+          # 写入全局PATH
           echo "PATH=/usr/bin:$PATH" >> $GITHUB_ENV
-          # 校验工具是否就绪
-          clang --version
-          ld.lld --version
-          llvm-ar --version
+
+          # 批量校验所有工具是否可用，方便排错
+          echo "===== Verify all LLVM tools ====="
+          for tool in "${TOOLS[@]}"; do
+            if command -v $tool &>/dev/null; then
+              echo "[OK] $tool : $($tool --version | head -n1)"
+            else
+              echo "[FAIL] $tool missing!"
+              exit 1
+            fi
+          done
           ls /usr/include/libelf.h
 
       # 拉取内核源码
@@ -42,24 +56,31 @@ jobs:
           cd kernel
           cp ../device.config .config
 
-      # 内核预处理：关闭符号裁剪，消除abi_symbollist.raw报错
+      # 内核预处理：屏蔽符号裁剪，彻底解决abi_symbollist.raw报错
       - name: Prepare Kernel Modules
         run: |
           cd kernel
           export PATH=${{ env.PATH }}
+          # 定义内核脚本LLVM工具变量兜底
+          export LLVM_AR=llvm-ar
+          export LLVM_NM=llvm-nm
+          export LLVM_OBJCOPY=llvm-objcopy
+          export LLVM_STRIP=llvm-strip
+
+          # 注释KSYM裁剪配置，不再依赖abi_symbollist.raw
           sed -i 's/^CONFIG_TRIM_UNUSED_KSYMS=y/# CONFIG_TRIM_UNUSED_KSYMS is not set/' .config
           sed -i 's|CONFIG_UNUSED_KSYMS_WHITELIST=.*|# CONFIG_UNUSED_KSYMS_WHITELIST is not set|' .config
 
           make ARCH=arm64 CC=clang CXX=clang++ LD=ld.lld LLVM=1 LLVM_IAS=1 olddefconfig
           make ARCH=arm64 CC=clang CXX=clang++ LD=ld.lld LLVM=1 LLVM_IAS=1 modules_prepare -j$(nproc)
 
-      # 编译ko
+      # 编译外部KO模块
       - name: Build KO Module
         run: |
           export PATH=${{ env.PATH }}
           make -j$(nproc) KDIR=./kernel ARCH=arm64 CC=clang CXX=clang++ LD=ld.lld LLVM=1
 
-      # 上传产物
+      # 上传编译产物
       - name: Upload KO File
         uses: actions/upload-artifact@v4
         with:
