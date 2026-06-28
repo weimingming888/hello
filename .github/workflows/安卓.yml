@@ -49,10 +49,10 @@ jobs:
           done
           ls /usr/include/libelf.h
 
-      # 拉取内核源码
+      # 拉取一加SM8650 6.1内核源码（替换原aosp common）
       - name: Pull Kernel Source
         run: |
-          git clone --depth=1 --branch android14-6.1 https://android.googlesource.com/kernel/common kernel
+          git clone --depth=1 --branch oneplus/sm8650_v_15.0.0_oneplus12 https://github.com/cctv18/android_kernel_common_oneplus_sm8650 kernel
           cd kernel
           cp ../device.config .config
 
