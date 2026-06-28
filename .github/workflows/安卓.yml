@@ -1,100 +1,77 @@
-name: Build Android ARM64 KO
+name: Build Android14 GKI KO (Bazel Kleaf android14-6.1 Repo Standard)
 on:
   push:
     branches: [ main ]
-  workflow_dispatch:
+  workflow_dispatch
 
 jobs:
-  build-android:
+  build-gki-module:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # 1. 拉取驱动源码（hello.c 放在仓库根目录）
+      - name: Checkout custom module source
+        uses: actions/checkout@v4
 
-      # 完整依赖 + 修复llvm.sh 404
-      - name: Install Full LLVM 17 Toolchain & System Dependencies
+      # 2. 安装系统依赖 + repo工具，补充git全局配置
+      - name: Install build dependencies & repo
         run: |
           sudo apt update -y
-          sudo apt install -y libelf-dev elfutils libarchive-dev zlib1g-dev \
-            libcap-dev libncurses-dev bison flex libssl-dev bc
+          sudo apt install -y git python3 python-is-python3 bison flex libncurses-dev bc libelf elfutils unzip curl build-essential zip
+          git config --global user.name "github-actions"
+          git config --global user.email "actions@github.com"
+          mkdir -p ~/bin
+          curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+          chmod a+x ~/bin/repo
+          echo "$HOME/bin" >> $GITHUB_PATH
 
-          wget https://apt.llvm.org/llvm.sh
-          chmod +x llvm.sh
-          sudo ./llvm.sh 17 all
-
-          TOOLS=(
-            clang clang++ lld ld.lld
-            llvm-ar llvm-nm llvm-objcopy llvm-strip llvm-objdump
-            llvm-readelf llvm-readobj llvm-size llvm-strings llvm-cxxfilt
-            llvm-as llvm-dis llvm-link llvm-mc llvm-ranlib llvm-symbolizer
-          )
-          for tool in "${TOOLS[@]}"; do
-            sudo ln -sf /usr/bin/${tool}-17 /usr/bin/$tool
-          done
-
-          echo "PATH=/usr/bin:$PATH" >> $GITHUB_ENV
-          echo "===== Verify all LLVM tools ====="
-          for tool in "${TOOLS[@]}"; do
-            if command -v $tool &>/dev/null; then
-              echo "[OK] $tool : $($tool --version | head -n1)"
-            else
-              echo "[FAIL] $tool missing!"
-              exit 1
-            fi
-          done
-
-      # 拉取内核源码 + 修正device.config复制路径（核心修复）
-      - name: Pull Kernel Source
+      # 3. Repo 拉取完整 android14-6.1 ACK 内核，增加重试机制
+      - name: Repo sync kernel android14-6.1
         run: |
-          git clone --depth=1 --branch oneplus/sm8650_v_15.0.0_oneplus12 https://github.com/cctv18/android_kernel_common_oneplus_sm8650 kernel
-          # 不cd kernel，直接从仓库根目录复制配置到kernel文件夹，解决cp找不到文件
-          cp ./device.config kernel/.config
+          mkdir kernel
           cd kernel
+          repo init -u https://android.googlesource.com/kernel/manifest -b android14-6.1
+          repo sync -j$(nproc) || repo sync -j$(nproc) || repo sync -j$(nproc)
 
-      # 内核预处理：强制gnu11 + thin LTO，关闭符号裁剪
-      - name: Prepare Kernel Modules
+      # 4. 部署自定义内核模块，修复EOF爆红问题
+      - name: Prepare hello GKI module
         run: |
           cd kernel
-          export PATH=${{ env.PATH }}
-          export LLVM_AR=llvm-ar
-          export LLVM_NM=llvm-nm
-          export LLVM_OBJCOPY=llvm-objcopy
-          export LLVM_STRIP=llvm-strip
+          mkdir -p modules/hello_mod
+          cp ../hello.c modules/hello_mod/hello.c
+          cat > modules/hello_mod/BUILD.bazel <<'EOF'
+load("//build/kernel/kleaf:kernel.bzl", "ddk_module")
 
-          sed -i 's/^CONFIG_TRIM_UNUSED_KSYMS=y/# CONFIG_TRIM_UNUSED_KSYMS is not set/' .config
-          sed -i 's|CONFIG_UNUSED_KSYMS_WHITELIST=.*|# CONFIG_UNUSED_KSYMS_WHITELIST is not set|' .config
+ddk_module(
+    name = "hello",
+    srcs = ["hello.c"],
+    out = "hello.ko",
+    kernel_build = "//:kernel_aarch64",
+    deps = ["//:kernel_aarch64"],
+    gki_module = True,
+    copts = [
+        "-std=gnu11",
+        "-ffreestanding",
+    ],
+)
+EOF
 
-          export KBUILD_CFLAGS="-std=gnu11 -flto=thin"
-          export KBUILD_LDFLAGS="-flto=thin"
-
-          make ARCH=arm64 CC=clang CXX=clang++ LD=ld.lld LLVM=1 LLVM_IAS=1 olddefconfig
-          make ARCH=arm64 CC=clang CXX=clang++ LD=ld.lld LLVM=1 LLVM_IAS=1 prepare
-
-          mkdir -p include/generated
-          if [ ! -f include/generated/utsrelease.h ]; then
-            echo '#define UTS_RELEASE "6.1.75"' > include/generated/utsrelease.h
-          fi
-          sed -i 's/#define UTS_RELEASE ".*"/#define UTS_RELEASE "6.1.75"/' include/generated/utsrelease.h
-          echo "Kernel release fixed: $(cat include/generated/utsrelease.h)"
-
-          make ARCH=arm64 CC=clang CXX=clang++ LD=ld.lld LLVM=1 LLVM_IAS=1 modules_prepare -j$(nproc)
-
-      # 编译KO，强制gnu11编译参数
-      - name: Build KO Module
+      # 5. Kleaf Bazel 编译 arm64 GKI 模块
+      - name: Build GKI module with official toolchain
         run: |
-          export PATH=${{ env.PATH }}
-          make -j$(nproc) \
-            KDIR=./kernel \
-            ARCH=arm64 \
-            CC=clang \
-            CXX=clang++ \
-            LD=ld.lld \
-            LLVM=1 \
-            EXTRA_CFLAGS="-std=gnu11 -ffreestanding -fno-pie -fno-plt -flto=thin"
-          modinfo hello.ko || true
+          cd kernel
+          chmod +x ./tools/bazel
+          ./tools/bazel build --platforms=//build/kernel/kleaf:kernel_aarch64_platform //modules/hello_mod:hello
 
-      # 上传产物
-      - name: Upload KO File
+      # 6. 自动搜索ko，兼容所有编译变体
+      - name: Extract compiled ko artifact
+        run: |
+          find kernel/bazel-out -name "hello.ko" -type f -exec cp {} ./ \;
+          ls -lh hello.ko
+          modinfo hello.ko || echo "modinfo skip: cross-compile arch mismatch"
+
+      # 7. 上传产物
+      - name: Upload compiled KO
         uses: actions/upload-artifact@v4
         with:
-          name: android-arm64-ko
+          name: android14-6.1-repo-gki-hello-ko
           path: hello.ko
