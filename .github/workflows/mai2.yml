@@ -47,7 +47,7 @@ jobs:
           # 删除 .repo 缩小缓存避免超限
           rm -rf .repo
 
-      # 预编译内核主目标，只缺失时执行一次，后续直接复用
+      # 预编译内核主目标，移除无法识别的 --no_abi_generation
       - name: 预构建内核基础环境（避免每次重编完整内核）
         run: |
           cd android-kernel
@@ -55,7 +55,6 @@ jobs:
             --config=fast \
             --disk_cache=~/.cache/bazel \
             --nokmi_symbol_list_violations_check \
-            --no_abi_generation \
             //common:kernel_aarch64
 
       - name: 准备驱动 (修正文件生成，适配Kleaf规范)
@@ -83,6 +82,7 @@ jobs:
           printf '    kernel_build = "//common:kernel_aarch64",\n' >> common/drivers/hello/BUILD
           printf ')\n' >> common/drivers/hello/BUILD
 
+      # 模块编译命令移除 --no_abi_generation，其余提速参数保留
       - name: 🚀 极速编译单模块
         run: |
           cd android-kernel
@@ -92,7 +92,6 @@ jobs:
             --jobs=$(nproc) \
             --local_ram_resources=HIGH \
             --nokmi_symbol_list_violations_check \
-            --no_abi_generation \
             //common/drivers/hello:hello
 
       - name: 上传 ko
