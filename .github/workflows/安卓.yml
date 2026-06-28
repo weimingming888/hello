@@ -73,6 +73,15 @@ jobs:
 
           make ARCH=arm64 CC=clang CXX=clang++ LD=ld.lld LLVM=1 LLVM_IAS=1 olddefconfig
 
+          # 关键：执行 make prepare 自动生成所有自动头文件，包含 utsrelease.h
+          make ARCH=arm64 CC=clang CXX=clang++ LD=ld.lld LLVM=1 prepare
+
+          # 兜底：防止目录/文件仍然不存在
+          mkdir -p include/generated
+          if [ ! -f include/generated/utsrelease.h ]; then
+            echo '#define UTS_RELEASE "6.1.75"' > include/generated/utsrelease.h
+          fi
+
           # 延后修改，文件已生成，不会找不到
           sed -i 's/#define UTS_RELEASE ".*"/#define UTS_RELEASE "6.1.75"/' include/generated/utsrelease.h
           echo "已强制修改内核版本为 6.1.75"
