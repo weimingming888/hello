@@ -1,4 +1,4 @@
-name: Build Android ARM64 KO
+name: Build Android ARM64 KO123
 on:
   push:
     branches: [ main ]
@@ -7,23 +7,37 @@ on:
 jobs:
   build-android:
     runs-on: ubuntu-latest
+    outputs:
+      cache-kernel: 
+
     steps:
       - uses: actions/checkout@v4
+
+      # 安装 repo 工具
+      - name: 安装 repo
+        run: |
+          curl https://storage.googleapis.com/git-repo-downloads/repo > /usr/local/bin/repo
+          chmod a+x /usr/local/bin/repo
+
+      # 拉取 Android14-6.1 内核（你原有repo逻辑保留）
+      - name: 拉取 Android14-6.1 内核
+        if: steps.cache-kernel.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p android-kernel && cd android-kernel
+          repo init -u https://android.googlesource.com/kernel/manifest -b common-android14-6.1 --no-repo-verify --depth=1
+          repo sync --force-sync --no-clone-bundle --no-tags -j32
 
       # 完整依赖安装 + 全套LLVM17软链接，一次性杜绝所有llvm-xxx缺失
       - name: Install Full LLVM 17 Toolchain & System Dependencies
         run: |
           sudo apt update -y
-          # 修正：Ubuntu 使用 libssl-dev，不存在 openssl-dev
           sudo apt install -y libelf-dev elfutils libarchive-dev zlib1g-dev \
             libcap-dev libncurses-dev bison flex libssl-dev bc
 
-          # 清华镜像一键安装完整 llvm17
           wget https://mirrors.tuna.tsinghua.edu.cn/llvm-apt/llvm.sh
           chmod +x llvm.sh
           sudo ./llvm.sh 17 all -m https://mirrors.tuna.tsinghua.edu.cn/llvm-apt
 
-          # ==================== 全套软链接（内核LLVM=1编译所有必备工具）====================
           TOOLS=(
             clang clang++ lld ld.lld
             llvm-ar llvm-nm llvm-objcopy llvm-strip llvm-objdump
@@ -34,10 +48,8 @@ jobs:
             sudo ln -sf /usr/bin/${tool}-17 /usr/bin/$tool
           done
 
-          # 写入全局PATH
           echo "PATH=/usr/bin:$PATH" >> $GITHUB_ENV
 
-          # 批量校验所有工具是否可用，方便排错
           echo "===== Verify all LLVM tools ====="
           for tool in "${TOOLS[@]}"; do
             if command -v $tool &>/dev/null; then
@@ -49,48 +61,35 @@ jobs:
           done
           ls /usr/include/libelf.h
 
-      # 拉取内核源码 + 切换到 6.1.75 版本（关键修改）
-      - name: Pull Kernel Source match 6.1.75
-        run: |
-          git clone --depth=1 --branch android14-6.1 https://android.googlesource.com/kernel/common kernel
-          cd kernel
-          # 查找包含 6.1.75 的提交
-          git fetch --unshallow
-          COMMIT=$(git log --grep="6\.1\.75" --oneline | head -n1 | awk '{print $1}')
-          if [ -z "$COMMIT" ]; then
-            echo "警告：未找到6.1.75提交，使用分支最新版，仍会版本不匹配死机"
-          else
-            git checkout $COMMIT
-            echo "已切换到6.1.75对应提交: $COMMIT"
-          fi
-          cp ../device.config .config
-
-      # 内核预处理：屏蔽符号裁剪，彻底解决abi_symbollist.raw报错
+      # 内核预处理路径修正：repo 源码内核根目录 android-kernel/common
       - name: Prepare Kernel Modules
         run: |
-          cd kernel
           export PATH=${{ env.PATH }}
-          # 定义内核脚本LLVM工具变量兜底
+          cd android-kernel/common
+
           export LLVM_AR=llvm-ar
           export LLVM_NM=llvm-nm
           export LLVM_OBJCOPY=llvm-objcopy
           export LLVM_STRIP=llvm-strip
 
-          # 注释KSYM裁剪配置，不再依赖abi_symbollist.raw
+          # 复制你的配置
+          cp ../../device.config .config
+
+          # 屏蔽KSYM裁剪，解决 abi_symbollist.raw 缺失报错
           sed -i 's/^CONFIG_TRIM_UNUSED_KSYMS=y/# CONFIG_TRIM_UNUSED_KSYMS is not set/' .config
           sed -i 's|CONFIG_UNUSED_KSYMS_WHITELIST=.*|# CONFIG_UNUSED_KSYMS_WHITELIST is not set|' .config
 
           make ARCH=arm64 CC=clang CXX=clang++ LD=ld.lld LLVM=1 LLVM_IAS=1 olddefconfig
           make ARCH=arm64 CC=clang CXX=clang++ LD=ld.lld LLVM=1 LLVM_IAS=1 modules_prepare -j$(nproc)
-          # 打印编译内核版本，确认是否为6.1.75
           cat include/generated/utsrelease.h
 
-      # 编译外部KO模块
+      # 编译外部KO模块，KDIR指向 repo 内核真实路径
       - name: Build KO Module
         run: |
           export PATH=${{ env.PATH }}
-          make -j$(nproc) KDIR=./kernel ARCH=arm64 CC=clang CXX=clang++ LD=ld.lld LLVM=1
-          # 编译完成直接打印模块 vermagic，方便核对
+          make -j$(nproc) \
+            KDIR=./android-kernel/common \
+            ARCH=arm64 CC=clang CXX=clang++ LD=ld.lld LLVM=1
           modinfo hello.ko || true
 
       # 上传编译产物
