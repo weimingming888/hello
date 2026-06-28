@@ -1,25 +1,25 @@
-name: Android14-6.1-KO
+name: Build Android ARM64 KO
 on:
+  push:
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
-  build:
+  build-android:
     runs-on: ubuntu-latest
+    outputs:
+      cache-kernel: # 你原有缓存步骤自行保留，我这里只适配结构
+        value: true
     steps:
       - uses: actions/checkout@v4
 
-      - name: 缓存内核源码
-        id: cache-kernel
-        uses: actions/cache@v4
-        with:
-          path: android-kernel
-          key: kernel-android14-6.1
-
+      # 安装 repo 工具
       - name: 安装 repo
         run: |
           curl https://storage.googleapis.com/git-repo-downloads/repo > /usr/local/bin/repo
           chmod a+x /usr/local/bin/repo
 
+      # 拉取 Android14-6.1 内核（你原有repo逻辑保留）
       - name: 拉取 Android14-6.1 内核
         if: steps.cache-kernel.outputs.cache-hit != 'true'
         run: |
@@ -27,34 +27,74 @@ jobs:
           repo init -u https://android.googlesource.com/kernel/manifest -b common-android14-6.1 --no-repo-verify --depth=1
           repo sync --force-sync --no-clone-bundle --no-tags -j32
 
-      - name: 放入驱动 + 自动生成编译配置
+      # 完整依赖安装 + 全套LLVM17软链接，一次性杜绝所有llvm-xxx缺失
+      - name: Install Full LLVM 17 Toolchain & System Dependencies
         run: |
-          cd android-kernel
-          mkdir -p common/drivers/hello
-          # 只拷贝源码文件
-          cp ../hello.c common/drivers/hello/
+          sudo apt update -y
+          sudo apt install -y libelf-dev elfutils libarchive-dev zlib1g-dev \
+            libcap-dev libncurses-dev bison flex libssl-dev bc
 
-          # 1. 自动创建 Kbuild
-          echo "obj-m += hello.o" > common/drivers/hello/Kbuild
+          wget https://mirrors.tuna.tsinghua.edu.cn/llvm-apt/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 17 all -m https://mirrors.tuna.tsinghua.edu.cn/llvm-apt
 
-          # 2. 自动创建 Bazel BUILD 文件 (修复版：添加了 outs 属性)
-          echo 'load("//build/kernel/kleaf:kernel.bzl", "kernel_module")' > common/drivers/hello/BUILD
-          echo 'kernel_module(' >> common/drivers/hello/BUILD
-          echo '    name = "hello",' >> common/drivers/hello/BUILD
-          echo '    srcs = glob(["**"]),' >> common/drivers/hello/BUILD
-          echo '    outs = ["hello.ko"],' >> common/drivers/hello/BUILD
-          echo '    kernel_build = "//common:kernel_aarch64",' >> common/drivers/hello/BUILD
-          echo ')' >> common/drivers/hello/BUILD
+          TOOLS=(
+            clang clang++ lld ld.lld
+            llvm-ar llvm-nm llvm-objcopy llvm-strip llvm-objdump
+            llvm-readelf llvm-readobj llvm-size llvm-strings llvm-cxxfilt
+            llvm-as llvm-dis llvm-link llvm-mc llvm-ranlib llvm-symbolizer
+          )
+          for tool in "${TOOLS[@]}"; do
+            sudo ln -sf /usr/bin/${tool}-17 /usr/bin/$tool
+          done
 
-      - name: 单独编译 hello.ko
+          echo "PATH=/usr/bin:$PATH" >> $GITHUB_ENV
+
+          echo "===== Verify all LLVM tools ====="
+          for tool in "${TOOLS[@]}"; do
+            if command -v $tool &>/dev/null; then
+              echo "[OK] $tool : $($tool --version | head -n1)"
+            else
+              echo "[FAIL] $tool missing!"
+              exit 1
+            fi
+          done
+          ls /usr/include/libelf.h
+
+      # 内核预处理路径修正：repo 源码内核根目录 android-kernel/common
+      - name: Prepare Kernel Modules
         run: |
-          cd android-kernel
-          # 仅编译驱动模块，不触发内核主树校验
-          tools/bazel build --config=fast //common/drivers/hello:hello
+          export PATH=${{ env.PATH }}
+          cd android-kernel/common
 
-      - name: 上传 ko
+          export LLVM_AR=llvm-ar
+          export LLVM_NM=llvm-nm
+          export LLVM_OBJCOPY=llvm-objcopy
+          export LLVM_STRIP=llvm-strip
+
+          # 复制你的配置
+          cp ../../device.config .config
+
+          # 屏蔽KSYM裁剪，解决 abi_symbollist.raw 缺失报错
+          sed -i 's/^CONFIG_TRIM_UNUSED_KSYMS=y/# CONFIG_TRIM_UNUSED_KSYMS is not set/' .config
+          sed -i 's|CONFIG_UNUSED_KSYMS_WHITELIST=.*|# CONFIG_UNUSED_KSYMS_WHITELIST is not set|' .config
+
+          make ARCH=arm64 CC=clang CXX=clang++ LD=ld.lld LLVM=1 LLVM_IAS=1 olddefconfig
+          make ARCH=arm64 CC=clang CXX=clang++ LD=ld.lld LLVM=1 LLVM_IAS=1 modules_prepare -j$(nproc)
+          cat include/generated/utsrelease.h
+
+      # 编译外部KO模块，KDIR指向 repo 内核真实路径
+      - name: Build KO Module
+        run: |
+          export PATH=${{ env.PATH }}
+          make -j$(nproc) \
+            KDIR=./android-kernel/common \
+            ARCH=arm64 CC=clang CXX=clang++ LD=ld.lld LLVM=1
+          modinfo hello.ko || true
+
+      # 上传编译产物
+      - name: Upload KO File
         uses: actions/upload-artifact@v4
         with:
-          name: hello-ko
-          # 修正路径：Bazel 产物在 bazel-bin 下，不在 out 下
-          path: android-kernel/bazel-bin/common/drivers/hello/hello.ko
+          name: android-arm64-ko
+          path: hello.ko
