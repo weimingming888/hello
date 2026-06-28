@@ -18,14 +18,12 @@ jobs:
           chmod +x llvm.sh
           sudo ./llvm.sh 17 all -m https://mirrors.tuna.tsinghua.edu.cn/llvm-apt
 
-          # 全局软链接，让make直接识别clang、ld.lld
           sudo ln -sf /usr/bin/clang-17 /usr/bin/clang
           sudo ln -sf /usr/bin/clang++-17 /usr/bin/clang++
           sudo ln -sf /usr/bin/lld-17 /usr/bin/lld
           sudo ln -sf /usr/bin/ld.lld-17 /usr/bin/ld.lld
 
           echo "PATH=/usr/bin:$PATH" >> $GITHUB_ENV
-          # 校验是否安装成功
           clang --version
           ld.lld --version
 
@@ -36,17 +34,18 @@ jobs:
           cd kernel
           cp ../device.config .config
 
-      # 内核预处理，提前创建空abi_symbollist.raw规避报错
+      # 内核预处理：关闭符号裁剪，彻底消除abi_symbollist.raw依赖
       - name: Prepare Kernel Modules
         run: |
           cd kernel
           export PATH=${{ env.PATH }}
-          mkdir -p gki/aarch64/symbols
-          touch gki/aarch64/symbols/abi_symbollist.raw
+          sed -i 's/^CONFIG_TRIM_UNUSED_KSYMS=y/# CONFIG_TRIM_UNUSED_KSYMS is not set/' .config
+          sed -i 's|CONFIG_UNUSED_KSYMS_WHITELIST=.*|# CONFIG_UNUSED_KSYMS_WHITELIST is not set|' .config
+
           make ARCH=arm64 CC=clang CXX=clang++ LD=ld.lld LLVM=1 LLVM_IAS=1 olddefconfig
           make ARCH=arm64 CC=clang CXX=clang++ LD=ld.lld LLVM=1 LLVM_IAS=1 modules_prepare -j$(nproc)
 
-      # 编译ko，同步指定工具链
+      # 编译ko
       - name: Build KO Module
         run: |
           export PATH=${{ env.PATH }}
