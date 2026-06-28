@@ -1,4 +1,4 @@
-name: Build Android ARM64 KO123
+name: Build Android ARM64 KO (Force 6.1.75)
 on:
   push:
     branches: [ main ]
@@ -7,27 +7,10 @@ on:
 jobs:
   build-android:
     runs-on: ubuntu-latest
-    outputs:
-      cache-kernel: 
-
     steps:
       - uses: actions/checkout@v4
 
-      # 安装 repo 工具
-      - name: 安装 repo
-        run: |
-          curl https://storage.googleapis.com/git-repo-downloads/repo > /usr/local/bin/repo
-          chmod a+x /usr/local/bin/repo
-
-      # 拉取 Android14-6.1 内核（你原有repo逻辑保留）
-      - name: 拉取 Android14-6.1 内核
-        if: steps.cache-kernel.outputs.cache-hit != 'true'
-        run: |
-          mkdir -p android-kernel && cd android-kernel
-          repo init -u https://android.googlesource.com/kernel/manifest -b common-android14-6.1 --no-repo-verify --depth=1
-          repo sync --force-sync --no-clone-bundle --no-tags -j32
-
-      # 完整依赖安装 + 全套LLVM17软链接，一次性杜绝所有llvm-xxx缺失
+      # 完整依赖安装 + 全套LLVM17软链接
       - name: Install Full LLVM 17 Toolchain & System Dependencies
         run: |
           sudo apt update -y
@@ -61,35 +44,39 @@ jobs:
           done
           ls /usr/include/libelf.h
 
-      # 内核预处理路径修正：repo 源码内核根目录 android-kernel/common
+      # 浅克隆，不再拉全历史，杜绝卡死
+      - name: Pull Kernel Source
+        run: |
+          git clone --depth=1 --branch android14-6.1 https://android.googlesource.com/kernel/common kernel
+          cd kernel
+          cp ../device.config .config
+
+      # 内核预处理 + 强制修改版本为 6.1.75
       - name: Prepare Kernel Modules
         run: |
+          cd kernel
           export PATH=${{ env.PATH }}
-          cd android-kernel/common
-
           export LLVM_AR=llvm-ar
           export LLVM_NM=llvm-nm
           export LLVM_OBJCOPY=llvm-objcopy
           export LLVM_STRIP=llvm-strip
 
-          # 复制你的配置
-          cp ../../device.config .config
-
-          # 屏蔽KSYM裁剪，解决 abi_symbollist.raw 缺失报错
           sed -i 's/^CONFIG_TRIM_UNUSED_KSYMS=y/# CONFIG_TRIM_UNUSED_KSYMS is not set/' .config
           sed -i 's|CONFIG_UNUSED_KSYMS_WHITELIST=.*|# CONFIG_UNUSED_KSYMS_WHITELIST is not set|' .config
 
           make ARCH=arm64 CC=clang CXX=clang++ LD=ld.lld LLVM=1 LLVM_IAS=1 olddefconfig
+
+          # 编译前强行修改内核版本字符串为 6.1.75
+          sed -i 's/#define UTS_RELEASE ".*"/#define UTS_RELEASE "6.1.75"/' include/generated/utsrelease.h
+
           make ARCH=arm64 CC=clang CXX=clang++ LD=ld.lld LLVM=1 LLVM_IAS=1 modules_prepare -j$(nproc)
           cat include/generated/utsrelease.h
 
-      # 编译外部KO模块，KDIR指向 repo 内核真实路径
+      # 编译外部KO模块
       - name: Build KO Module
         run: |
           export PATH=${{ env.PATH }}
-          make -j$(nproc) \
-            KDIR=./android-kernel/common \
-            ARCH=arm64 CC=clang CXX=clang++ LD=ld.lld LLVM=1
+          make -j$(nproc) KDIR=./kernel ARCH=arm64 CC=clang CXX=clang++ LD=ld.lld LLVM=1
           modinfo hello.ko || true
 
       # 上传编译产物
