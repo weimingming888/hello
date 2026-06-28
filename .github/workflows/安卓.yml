@@ -10,17 +10,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # 完整依赖安装 + 全套LLVM17软链接
+      # 完整依赖安装 + 全套LLVM17软链接，一次性杜绝所有llvm-xxx缺失
       - name: Install Full LLVM 17 Toolchain & System Dependencies
         run: |
           sudo apt update -y
+          # 修正：Ubuntu 使用 libssl-dev，不存在 openssl-dev
           sudo apt install -y libelf-dev elfutils libarchive-dev zlib1g-dev \
             libcap-dev libncurses-dev bison flex libssl-dev bc
 
+          # 清华镜像一键安装完整 llvm17
           wget https://mirrors.tuna.tsinghua.edu.cn/llvm-apt/llvm.sh
           chmod +x llvm.sh
           sudo ./llvm.sh 17 all -m https://mirrors.tuna.tsinghua.edu.cn/llvm-apt
 
+          # ==================== 全套软链接（内核LLVM=1编译所有必备工具）====================
           TOOLS=(
             clang clang++ lld ld.lld
             llvm-ar llvm-nm llvm-objcopy llvm-strip llvm-objdump
@@ -31,8 +34,10 @@ jobs:
             sudo ln -sf /usr/bin/${tool}-17 /usr/bin/$tool
           done
 
+          # 写入全局PATH
           echo "PATH=/usr/bin:$PATH" >> $GITHUB_ENV
 
+          # 批量校验所有工具是否可用，方便排错
           echo "===== Verify all LLVM tools ====="
           for tool in "${TOOLS[@]}"; do
             if command -v $tool &>/dev/null; then
@@ -44,34 +49,36 @@ jobs:
           done
           ls /usr/include/libelf.h
 
-      # 普通浅克隆，无任何异常git操作，不会卡住、不会报错
+      # 拉取内核源码
       - name: Pull Kernel Source
         run: |
           git clone --depth=1 --branch android14-6.1 https://android.googlesource.com/kernel/common kernel
           cd kernel
           cp ../device.config .config
 
-      # 内核预处理 + 可选强制修改版本号为6.1.75
+      # 内核预处理：屏蔽符号裁剪，彻底解决abi_symbollist.raw报错 + 篡改版本6.1.75
       - name: Prepare Kernel Modules
         run: |
           cd kernel
           export PATH=${{ env.PATH }}
+          # 定义内核脚本LLVM工具变量兜底
           export LLVM_AR=llvm-ar
           export LLVM_NM=llvm-nm
           export LLVM_OBJCOPY=llvm-objcopy
           export LLVM_STRIP=llvm-strip
 
+          # 注释KSYM裁剪配置，不再依赖abi_symbollist.raw
           sed -i 's/^CONFIG_TRIM_UNUSED_KSYMS=y/# CONFIG_TRIM_UNUSED_KSYMS is not set/' .config
           sed -i 's|CONFIG_UNUSED_KSYMS_WHITELIST=.*|# CONFIG_UNUSED_KSYMS_WHITELIST is not set|' .config
 
           make ARCH=arm64 CC=clang CXX=clang++ LD=ld.lld LLVM=1 LLVM_IAS=1 olddefconfig
 
-          # ========== 开启下面两行就会强制vermagic=6.1.75，骗过版本校验 ==========
-          # sed -i 's/#define UTS_RELEASE ".*"/#define UTS_RELEASE "6.1.75"/' include/generated/utsrelease.h
-          # echo "已强制修改内核版本为 6.1.75"
+          # 延后修改，文件已生成，不会找不到
+          sed -i 's/#define UTS_RELEASE ".*"/#define UTS_RELEASE "6.1.75"/' include/generated/utsrelease.h
+          echo "已强制修改内核版本为 6.1.75"
+          cat include/generated/utsrelease.h
 
           make ARCH=arm64 CC=clang CXX=clang++ LD=ld.lld LLVM=1 LLVM_IAS=1 modules_prepare -j$(nproc)
-          cat include/generated/utsrelease.h
 
       # 编译外部KO模块
       - name: Build KO Module
