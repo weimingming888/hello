@@ -1,0 +1,56 @@
+name: Build Android ARM64 KO
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 安装依赖
+      - name: Install deps
+        run: |
+          sudo apt update
+          sudo apt install -y build-essential bison flex libssl-dev libelf-dev git
+
+      # 拉取Google官方Android Clang工具链
+      - name: Download Android Clang
+        run: |
+          git clone --depth=1 https://github.com/llvm/llvm-project.git clang
+          cd clang
+          mkdir build && cd build
+          cmake -DLLVM_ENABLE_PROJECTS=clang -DCMAKE_BUILD_TYPE=Release ../llvm
+          make -j$(nproc)
+          echo "CLANG_PATH=$PWD/bin" >> $GITHUB_ENV
+
+      # 拉取对应安卓内核（示例GKI 5.10，替换你的设备内核仓库）
+      - name: Pull Android Kernel Source
+        run: |
+          git clone --depth=1 --branch android14-6.1 https://android.googlesource.com/kernel/common kernel
+          cd kernel
+          # 这里替换成你手机导出的config.gz
+          wget https://你的仓库地址/设备.config -O .config
+
+      # 内核预编译
+      - name: Prepare kernel
+        run: |
+          cd kernel
+          export PATH=${{ env.CLANG_PATH }}:$PATH
+          make ARCH=arm64 LLVM=1 LLVM_IAS=1 olddefconfig
+          make ARCH=arm64 LLVM=1 LLVM_IAS=1 modules_prepare -j$(nproc)
+
+      # 交叉编译ARM64 ko
+      - name: Compile KO
+        run: |
+          export PATH=${{ env.CLANG_PATH }}:$PATH
+          make -j$(nproc) KDIR=./kernel ARCH=arm64 LLVM=1
+
+      # 上传产物
+      - name: Upload Android KO
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-arm64-ko
+          path: hello.ko
