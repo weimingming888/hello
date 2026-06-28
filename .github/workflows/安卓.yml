@@ -7,47 +7,46 @@ on:
 jobs:
   build-android:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+  steps:
+    - uses: actions/checkout@v4
 
-      # 安装编译依赖
-      - name: Install deps
-        run: |
-          sudo apt update
-          sudo apt install -y build-essential bison flex libssl-dev libelf-dev git wget unzip xz-utils
+    # 基础依赖 + clang17 直接apt安装，规避github下载失败
+    - name: Install deps & Clang17
+      run: |
+        sudo apt update
+        sudo apt install -y build-essential bison flex libssl-dev libelf-dev git xz-utils clang-17 lld-17 llvm-17
+        ln -sf /usr/bin/clang-17 $HOME/.local/bin/clang
+        ln -sf /usr/bin/clang++-17 $HOME/.local/bin/clang++
+        ln -sf /usr/bin/lld-17 $HOME/.local/bin/lld
+        ln -sf /usr/bin/llvm-ar-17 $HOME/.local/bin/llvm-ar
+        ln -sf /usr/bin/llvm-nm-17 $HOME/.local/bin/llvm-nm
+        echo "PATH=$HOME/.local/bin:$PATH" >> $GITHUB_ENV
 
-      # 下载官方匹配内核的 Clang 17.0.2（修复404）
-      - name: Get Android Clang 17.0.2
-        run: |
-          wget -q https://github.com/llvm/llvm-project/releases/download/llvmorg-17.0.2/clang+llvm-17.0.2-x86_64-linux-gnu.tar.xz
-          tar -xf clang+llvm-17.0.2-x86_64-linux-gnu.tar.xz
-          echo "PATH=$PWD/clang+llvm-17.0.2-x86_64-linux-gnu/bin:$PATH" >> $GITHUB_ENV
+    # 拉取内核源码
+    - name: Pull Kernel Source
+      run: |
+        git clone --depth=1 --branch android14-6.1 https://android.googlesource.com/kernel/common kernel
+        cd kernel
+        # 本地仓库复制config，无外网url
+        cp ../device.config .config
 
-      # 拉取 android14-6.1 通用内核
-      - name: Pull Kernel Source
-        run: |
-          git clone --depth=1 --branch android14-6.1 https://android.googlesource.com/kernel/common kernel
-          cd kernel
-          # 本地仓库读取 device.config，无任何外网URL下载配置
-          cp ../device.config .config
+    # 内核预处理
+    - name: Prepare Kernel Modules
+      run: |
+        cd kernel
+        export PATH=${{ env.PATH }}
+        make ARCH=arm64 LLVM=1 LLVM_IAS=1 olddefconfig
+        make ARCH=arm64 LLVM=1 LLVM_IAS=1 modules_prepare -j$(nproc)
 
-      # 内核模块环境预处理
-      - name: Prepare Kernel Modules
-        run: |
-          cd kernel
-          export PATH=${{ env.PATH }}
-          make ARCH=arm64 LLVM=1 LLVM_IAS=1 olddefconfig
-          make ARCH=arm64 LLVM=1 LLVM_IAS=1 modules_prepare -j$(nproc)
+    # 编译ko
+    - name: Build KO Module
+      run: |
+        export PATH=${{ env.PATH }}
+        make -j$(nproc) KDIR=./kernel ARCH=arm64 LLVM=1
 
-      # 编译 ko
-      - name: Build KO Module
-        run: |
-          export PATH=${{ env.PATH }}
-          make -j$(nproc) KDIR=./kernel ARCH=arm64 LLVM=1
-
-      # 上传编译产物
-      - name: Upload KO File
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-arm64-ko
-          path: hello.ko
+    # 上传产物
+    - name: Upload KO File
+      uses: actions/upload-artifact@v4
+      with:
+        name: android-arm64-ko
+        path: hello.ko
