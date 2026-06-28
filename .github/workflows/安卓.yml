@@ -10,33 +10,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # 基础依赖 + clang17 多源下载
-      - name: Get Android Clang 17.0.2
+      # 替换为稳定安装方案
+      - name: Get Android Clang 17（官方脚本+清华镜像加速）
         run: |
-          CLANG_FILE="clang+llvm-17.0.2-x86_64-linux-gnu.tar.xz"
-          # 尝试多个镜像源
-          MIRRORS=(
-            "https://github.com/llvm/llvm-project/releases/download/llvmorg-17.0.2/"
-            "https://releases.llvm.org/17.0.2/"
-            "https://ghproxy.com/https://github.com/llvm/llvm-project/releases/download/llvmorg-17.0.2/"
-          )
-          
-          for MIRROR in "${MIRRORS[@]}"; do
-            echo "尝试从 $MIRROR 下载..."
-            if wget -q --timeout=30 -O "$CLANG_FILE" "${MIRROR}${CLANG_FILE}"; then
-              echo "下载成功"
-              break
-            fi
-            echo "下载失败，尝试下一个源..."
-          done
-          
-          if [ ! -f "$CLANG_FILE" ]; then
-            echo "所有镜像源都下载失败"
-            exit 1
-          fi
-          
-          tar -xf "$CLANG_FILE"
-          echo "PATH=$PWD/clang+llvm-17.0.2-x86_64-linux-gnu/bin:$PATH" >> $GITHUB_ENV
+          sudo apt update -y
+          wget https://mirrors.tuna.tsinghua.edu.cn/llvm-apt/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 17 all -m https://mirrors.tuna.tsinghua.edu.cn/llvm-apt
+          echo "PATH=/usr/bin:$PATH" >> $GITHUB_ENV
+          clang-17 --version
 
       # 拉取内核源码
       - name: Pull Kernel Source
@@ -49,12 +31,14 @@ jobs:
       - name: Prepare Kernel Modules
         run: |
           cd kernel
+          export PATH=${{ env.PATH }}
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 olddefconfig
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 modules_prepare -j$(nproc)
 
       # 编译ko
       - name: Build KO Module
         run: |
+          export PATH=${{ env.PATH }}
           make -j$(nproc) KDIR=./kernel ARCH=arm64 LLVM=1
 
       # 上传产物
