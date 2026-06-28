@@ -10,43 +10,43 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # 安装依赖
+      # 安装编译依赖
       - name: Install deps
         run: |
           sudo apt update
-          sudo apt install -y build-essential bison flex libssl-dev libelf-dev git
+          sudo apt install -y build-essential bison flex libssl-dev libelf-dev git wget unzip xz-utils
 
-      # 预编译clang，不源码编译
-      - name: Download Android Prebuilt Clang 17
+      # 下载官方匹配内核的 Clang 17.0.2（修复404）
+      - name: Get Android Clang 17.0.2
         run: |
-          wget https://dl.google.com/android/ndk/android-ndk-r27c-linux.zip
-          unzip android-ndk-r27c-linux.zip
-          echo "PATH=$PWD/android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH" >> $GITHUB_ENV
+          wget -q https://github.com/llvm/llvm-project/releases/download/llvmorg-17.0.2/clang+llvm-17.0.2-x86_64-linux-gnu.tar.xz
+          tar -xf clang+llvm-17.0.2-x86_64-linux-gnu.tar.xz
+          echo "PATH=$PWD/clang+llvm-17.0.2-x86_64-linux-gnu/bin:$PATH" >> $GITHUB_ENV
 
-      # 拉取内核源码
-      - name: Pull Android Kernel Source
+      # 拉取 android14-6.1 通用内核
+      - name: Pull Kernel Source
         run: |
           git clone --depth=1 --branch android14-6.1 https://android.googlesource.com/kernel/common kernel
           cd kernel
-          # 直接复制仓库里本地的config，无任何网络URL
+          # 本地仓库读取 device.config，无任何外网URL下载配置
           cp ../device.config .config
 
-      # 内核预处理
-      - name: Prepare kernel
+      # 内核模块环境预处理
+      - name: Prepare Kernel Modules
         run: |
           cd kernel
           export PATH=${{ env.PATH }}
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 olddefconfig
           make ARCH=arm64 LLVM=1 LLVM_IAS=1 modules_prepare -j$(nproc)
 
-      # 编译ko
-      - name: Compile KO
+      # 编译 ko
+      - name: Build KO Module
         run: |
           export PATH=${{ env.PATH }}
           make -j$(nproc) KDIR=./kernel ARCH=arm64 LLVM=1
 
-      # 上传产物
-      - name: Upload Android KO
+      # 上传编译产物
+      - name: Upload KO File
         uses: actions/upload-artifact@v4
         with:
           name: android-arm64-ko
