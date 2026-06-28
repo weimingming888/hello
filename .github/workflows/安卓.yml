@@ -7,61 +7,59 @@ on:
 jobs:
   build-android:
     runs-on: ubuntu-latest
-  steps:
-    - uses: actions/checkout@v4
+    steps:
+      - uses: actions/checkout@v4
 
-    # 基础依赖 + clang17 直接apt安装，规避github下载失败
-  - name: Get Android Clang 17.0.2
-  run: |
-    CLANG_FILE="clang+llvm-17.0.2-x86_64-linux-gnu.tar.xz"
-    # 尝试多个镜像源
-    MIRRORS=(
-      "https://github.com/llvm/llvm-project/releases/download/llvmorg-17.0.2/"
-      "https://releases.llvm.org/17.0.2/"
-      "https://ghproxy.com/https://github.com/llvm/llvm-project/releases/download/llvmorg-17.0.2/"
-    )
-    
-    for MIRROR in "${MIRRORS[@]}"; do
-      echo "尝试从 $MIRROR 下载..."
-      if wget -q --timeout=30 -O "$CLANG_FILE" "${MIRROR}${CLANG_FILE}"; then
-        echo "下载成功"
-        break
-      fi
-      echo "下载失败，尝试下一个源..."
-    done
-    
-    if [ ! -f "$CLANG_FILE" ]; then
-      echo "所有镜像源都下载失败"
-      exit 1
-    fi
-    
-    tar -xf "$CLANG_FILE"
-    echo "PATH=$PWD/clang+llvm-17.0.2-x86_64-linux-gnu/bin:$PATH" >> $GITHUB_ENV
-    # 拉取内核源码
-    - name: Pull Kernel Source
-      run: |
-        git clone --depth=1 --branch android14-6.1 https://android.googlesource.com/kernel/common kernel
-        cd kernel
-        # 本地仓库复制config，无外网url
-        cp ../device.config .config
+      # 基础依赖 + clang17 多源下载
+      - name: Get Android Clang 17.0.2
+        run: |
+          CLANG_FILE="clang+llvm-17.0.2-x86_64-linux-gnu.tar.xz"
+          # 尝试多个镜像源
+          MIRRORS=(
+            "https://github.com/llvm/llvm-project/releases/download/llvmorg-17.0.2/"
+            "https://releases.llvm.org/17.0.2/"
+            "https://ghproxy.com/https://github.com/llvm/llvm-project/releases/download/llvmorg-17.0.2/"
+          )
+          
+          for MIRROR in "${MIRRORS[@]}"; do
+            echo "尝试从 $MIRROR 下载..."
+            if wget -q --timeout=30 -O "$CLANG_FILE" "${MIRROR}${CLANG_FILE}"; then
+              echo "下载成功"
+              break
+            fi
+            echo "下载失败，尝试下一个源..."
+          done
+          
+          if [ ! -f "$CLANG_FILE" ]; then
+            echo "所有镜像源都下载失败"
+            exit 1
+          fi
+          
+          tar -xf "$CLANG_FILE"
+          echo "PATH=$PWD/clang+llvm-17.0.2-x86_64-linux-gnu/bin:$PATH" >> $GITHUB_ENV
 
-    # 内核预处理
-    - name: Prepare Kernel Modules
-      run: |
-        cd kernel
-        export PATH=${{ env.PATH }}
-        make ARCH=arm64 LLVM=1 LLVM_IAS=1 olddefconfig
-        make ARCH=arm64 LLVM=1 LLVM_IAS=1 modules_prepare -j$(nproc)
+      # 拉取内核源码
+      - name: Pull Kernel Source
+        run: |
+          git clone --depth=1 --branch android14-6.1 https://android.googlesource.com/kernel/common kernel
+          cd kernel
+          cp ../device.config .config
 
-    # 编译ko
-    - name: Build KO Module
-      run: |
-        export PATH=${{ env.PATH }}
-        make -j$(nproc) KDIR=./kernel ARCH=arm64 LLVM=1
+      # 内核预处理
+      - name: Prepare Kernel Modules
+        run: |
+          cd kernel
+          make ARCH=arm64 LLVM=1 LLVM_IAS=1 olddefconfig
+          make ARCH=arm64 LLVM=1 LLVM_IAS=1 modules_prepare -j$(nproc)
 
-    # 上传产物
-    - name: Upload KO File
-      uses: actions/upload-artifact@v4
-      with:
-        name: android-arm64-ko
-        path: hello.ko
+      # 编译ko
+      - name: Build KO Module
+        run: |
+          make -j$(nproc) KDIR=./kernel ARCH=arm64 LLVM=1
+
+      # 上传产物
+      - name: Upload KO File
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-arm64-ko
+          path: hello.ko
