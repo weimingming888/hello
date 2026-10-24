@@ -1,1 +1,1 @@
-multi-file test A
+patched: $& and $1 and $$
